@@ -1,5 +1,7 @@
 /*
 
 !src/
+src/*.o
+src/config.h
 !Makefile
 !.gitignore
