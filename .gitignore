@@ -5,3 +5,4 @@ src/*.o
 src/config.h
 !Makefile
 !.gitignore
+!README.md
