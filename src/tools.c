@@ -115,3 +115,42 @@ write_end:
   jdelete(result);
   return result_str;
 }
+
+char* bash_tool(const char* args_str) {
+  log(INFO, "Calling Bash tool");
+  log(DEBUG, "Bash tool args: %s", args_str);
+
+  jnode_t* args = NULL;
+  jnode_t* result = NULL;
+  char* result_str = NULL;
+  FILE* pipe = NULL;
+
+  args = jfrom_string(args_str);
+  result = jobject_new();
+  TOOL_CHECK(bash, args, "Failed to parse arguments JSON: %s", jerror());
+
+  jnode_t* command_node = jobject_get(args, "command");
+  TOOL_CHECK(bash, command_node, "Missing required parameter: command");
+  TOOL_CHECK(bash, jis_string(command_node),
+             "Parameter 'command' must be a string");
+
+  const char* command = jstring_content(command_node);
+  pipe = popen(command, "r");
+  TOOL_CHECK(bash, pipe, "Failed to execute bash command: %s", command);
+
+  jnode_t* output = jstring_new(0, "");
+  TOOL_CHECK(bash, output, "Failed to allocate memory for command output");
+  jobject_put(result, "stdout", output);
+
+  char buf[1024];
+  while (fgets(buf, sizeof(buf), pipe) != NULL) {
+    jstring_concat(output, buf);
+  }
+
+bash_end:
+  if (pipe) pclose(pipe);
+  result_str = jto_string(result);
+  jdelete(args);
+  jdelete(result);
+  return result_str;
+}

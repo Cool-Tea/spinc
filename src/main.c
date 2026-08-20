@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
   }
 
   jnode_t* jmessages = jarray_new();
-  jarray_add(jmessages, system_message(strdup("You are a helpful assistant.")));
+  jarray_add(jmessages, system_message(strdup(system_prompt)));
   jarray_add(jmessages, user_message(strdup(prompt)));
 
   while (1) {
