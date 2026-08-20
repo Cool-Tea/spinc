@@ -20,8 +20,15 @@ extern char* bash_tool(const char* params);
 // tool definitions
 static const tool_t tools[] = {
     DEFINE_TOOL(
-        "Read", "Read a file and return its contents.", read_tool,
-        DEFINE_PARAM(true, "path", "string", "The path to the file to read.")),
+        "Read", "Read a file and return its contents with line numbers.",
+        read_tool,
+        DEFINE_PARAM(true, "path", "string", "The path to the file to read."),
+        DEFINE_PARAM(
+            false, "offset", "integer",
+            "The line number offset to start reading from. Defaults to 1."),
+        DEFINE_PARAM(false, "limit", "integer",
+                     "The number of lines to read. Defaults to reading the "
+                     "entire file.")),
     DEFINE_TOOL(
         "Write", "Write contents to a file.", write_tool,
         DEFINE_PARAM(true, "path", "string", "The path to the file to write."),

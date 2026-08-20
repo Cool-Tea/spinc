@@ -6,6 +6,8 @@
 
 #include "log.h"
 
+#define READ_TOOL_MAX_SIZE (64 * 1024)  // 64KB
+
 // clang-format off
 
 #define TOOL_CHECK(name, condition, msg, ...)                \
@@ -33,6 +35,13 @@ void tool_error(jnode_t* result, const char* msg, ...) {
 
 // clang-format on
 
+/**
+ * Read a file and return its contents with line numbers.
+ * @param path The path to the file to read.
+ * @param offset The line number offset to start reading from (optional).
+ * @param limit The number of lines to read (optional).
+ * @return A JSON string with the file contents and line numbers.
+ */
 char* read_tool(const char* args_str) {
   log(INFO, "Calling Read tool");
   log(DEBUG, "Read tool args: %s", args_str);
@@ -41,7 +50,6 @@ char* read_tool(const char* args_str) {
   jnode_t* result = NULL;
   char* result_str = NULL;
   FILE* f = NULL;
-  char* buf = NULL;
 
   args = jfrom_string(args_str);
   result = jobject_new();
@@ -51,32 +59,89 @@ char* read_tool(const char* args_str) {
   TOOL_CHECK(read, path_node, "Missing required parameter: path");
   TOOL_CHECK(read, jis_string(path_node), "Parameter 'path' must be a string");
 
+  jnode_t* offset_node = jobject_get(args, "offset");
+  if (offset_node) {
+    TOOL_CHECK(read, jis_number(offset_node),
+               "Parameter 'offset' must be an integer");
+  }
+
+  jnode_t* limit_node = jobject_get(args, "limit");
+  if (limit_node) {
+    TOOL_CHECK(read, jis_number(limit_node),
+               "Parameter 'limit' must be an integer");
+  }
+
   const char* path = jstring_content(path_node);
   f = fopen(path, "rb");
   TOOL_CHECK(read, f, "Failed to open file: %s", path);
 
-  fseek(f, 0, SEEK_END);
-  size_t size = ftell(f);
-  fseek(f, 0, SEEK_SET);
-  buf = malloc(size + 1);
-  TOOL_CHECK(read, buf, "Failed to allocate memory for file contents");
+  jnode_t* contents = jstring_new(0, "");
+  TOOL_CHECK(read, contents, "Failed to allocate memory for file contents");
+  jobject_put(result, "contents", contents);
 
-  TOOL_CHECK(read, fread(buf, 1, size, f) == size,
-             "Failed to read file contents: %s", path);
-  buf[size] = '\0';
-  jobject_put(result, "contents", jstring_own(buf));
-  // Ownership transferred to result
-  buf = NULL;
+  size_t offset = 0;
+  if (offset_node) {
+    offset = (size_t)jas_number(offset_node)->value;
+  }
+
+  size_t end_lineno = (size_t)-1;
+  if (limit_node) {
+    end_lineno = offset + (size_t)jas_number(limit_node)->value;
+  }
+
+  size_t lineno = 1, last_lineno = 0;
+  char buf[1024];
+  // skip lines until offset
+  while (fgets(buf, sizeof(buf), f) != NULL && lineno < offset) {
+    if (strchr(buf, '\n')) {
+      last_lineno = lineno;
+      ++lineno;
+    }
+  }
+  TOOL_CHECK(
+      read, !feof(f),
+      "Parameter 'offset' exceeds the number of lines (%zu lines) in the file",
+      last_lineno);
+  while (fgets(buf, sizeof(buf), f) != NULL && lineno < end_lineno &&
+         jstring_len(contents) < READ_TOOL_MAX_SIZE) {
+    if (lineno > last_lineno) {
+      char linebuf[32];
+      snprintf(linebuf, sizeof(linebuf), "%8zu: ", lineno);
+      jstring_concat(contents, linebuf);
+    }
+    if (strchr(buf, '\n')) {
+      last_lineno = lineno;
+      ++lineno;
+    }
+    jstring_concat(contents, buf);
+  }
+
+  if (jstring_len(contents) >= READ_TOOL_MAX_SIZE) {
+    jstring_concat(contents, "[Partial View]");
+    jnode_t* warning =
+        jstring_new(0, "Incomplete Read: Read exceeded maximum size of 64KB. ");
+    TOOL_CHECK(read, warning, "Failed to allocate memory for warning message");
+    jobject_put(result, "warning", warning);
+    snprintf(buf, sizeof(buf), "Read %zu lines. ", last_lineno);
+    jstring_concat(warning, buf);
+    snprintf(buf, sizeof(buf), "Continue reading from line %zu.", last_lineno);
+    jstring_concat(warning, buf);
+  }
 
 read_end:
   if (f) fclose(f);
-  if (buf) free(buf);
   result_str = jto_string(result);
   jdelete(args);
   jdelete(result);
   return result_str;
 }
 
+/**
+ * Create a new file or overwrite an existing file.
+ * @param path The path to the file to write.
+ * @param contents The contents to write to the file.
+ * @return A JSON string with the result of the operation.
+ */
 char* write_tool(const char* args_str) {
   log(INFO, "Calling Write tool");
   log(DEBUG, "Write tool args: %s", args_str);
@@ -116,6 +181,11 @@ write_end:
   return result_str;
 }
 
+/**
+ * Execute a bash command and return its output.
+ * @param command The bash command to execute.
+ * @return A JSON string with the command output.
+ */
 char* bash_tool(const char* args_str) {
   log(INFO, "Calling Bash tool");
   log(DEBUG, "Bash tool args: %s", args_str);
