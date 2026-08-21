@@ -45,6 +45,7 @@ static const tool_t tools[] = {
                 DEFINE_PARAM(true, "command", "string",
                              "The bash command to execute.")),
 };
+static const size_t n_tool = sizeof(tools) / sizeof(tool_t);
 
 /*****************
  * System Prompt *
