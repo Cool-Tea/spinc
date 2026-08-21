@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <string.h>
 #include "sjson.h"
 
@@ -50,6 +51,7 @@ char* read_tool(const char* args_str) {
   jnode_t* result = NULL;
   char* result_str = NULL;
   FILE* f = NULL;
+  char* line = NULL;
 
   args = jfrom_string(args_str);
   result = jobject_new();
@@ -89,45 +91,53 @@ char* read_tool(const char* args_str) {
     end_lineno = offset + (size_t)jas_number(limit_node)->value;
   }
 
-  size_t lineno = 1, last_lineno = 0;
-  char buf[1024];
+  int linelen = 0;
+  size_t lineno = 1, linecap = 0;
   // skip lines until offset
-  while (lineno < offset && fgets(buf, sizeof(buf), f) != NULL) {
-    last_lineno = lineno;
-    if (strchr(buf, '\n')) ++lineno;
+  while (lineno < offset && (linelen = getline(&line, &linecap, f)) > 0) {
+    ++lineno;
   }
   TOOL_CHECK(
       read, !feof(f),
       "Parameter 'offset' exceeds the number of lines (%zu lines) in the file",
-      last_lineno);
+      lineno);
+
+  char linebuf[256];
+  int lineno_len = snprintf(linebuf, sizeof(linebuf), "%zu", lineno) + 4;
+
+  bool partial_read = false;
   while (lineno < end_lineno && jstring_len(contents) < READ_TOOL_MAX_SIZE &&
-         fgets(buf, sizeof(buf), f) != NULL) {
-    if (lineno > last_lineno) {
-      char linebuf[32];
-      snprintf(linebuf, sizeof(linebuf), "%8zu: ", lineno);
-      jstring_concat(contents, linebuf);
+         (linelen = getline(&line, &linecap, f)) > 0) {
+    snprintf(linebuf, sizeof(linebuf), "%*zu: ", lineno_len, lineno);
+    jstring_concat(contents, linebuf);
+    size_t read_len = linelen;
+    if (jstring_len(contents) + linelen >= READ_TOOL_MAX_SIZE) {
+      read_len = READ_TOOL_MAX_SIZE - jstring_len(contents);
+      partial_read = true;
+    } else {
+      ++lineno;
     }
-    last_lineno = lineno;
-    if (strchr(buf, '\n')) ++lineno;
-    jstring_concat(contents, buf);
+    jstring_nconcat(contents, line, read_len);
   }
 
-  if (jstring_len(contents) >= READ_TOOL_MAX_SIZE) {
+  if (partial_read) {
     jstring_concat(contents, "[Partial View]");
     jnode_t* warning =
         jstring_new(0, "Incomplete Read: Read exceeded maximum size of 64KB. ");
     TOOL_CHECK(read, warning, "Failed to allocate memory for warning message");
     jobject_put(result, "warning", warning);
-    snprintf(buf, sizeof(buf), "Read %zu lines. ", last_lineno);
-    jstring_concat(warning, buf);
-    snprintf(buf, sizeof(buf), "Continue reading from line %zu.", last_lineno);
-    jstring_concat(warning, buf);
+    snprintf(linebuf, sizeof(linebuf), "Read %zu lines. ", lineno - offset + 1);
+    jstring_concat(warning, linebuf);
+    snprintf(linebuf, sizeof(linebuf), "Continue reading from line %zu.",
+             lineno);
+    jstring_concat(warning, linebuf);
   }
 
-  log(INFO, "Read %zu lines from file: %s", last_lineno, path);
+  log(INFO, "Read %zu lines from file: %s", lineno - offset + 1, path);
   log(DEBUG, "Read content:\n%s", jstring_content(contents));
 
 read_end:
+  if (line) free(line);
   if (f) fclose(f);
   result_str = jto_string(result);
   jdelete(args);
