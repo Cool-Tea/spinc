@@ -38,8 +38,8 @@ int main(int argc, char* argv[]) {
   jarray_add(jmessages, user_message(strdup(prompt)));
 
   while (1) {
-    char* resp = call_api(&model, OPENAI, jmessages, tools,
-                          sizeof(tools) / sizeof(tool_t));
+    char* resp =
+        call_api(&model, jmessages, tools, sizeof(tools) / sizeof(tool_t));
     if (!resp) {
       log(ERROR, "Failed to call API");
       break;

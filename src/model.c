@@ -68,6 +68,16 @@ static char* call_openai_api(const model_t* model, jnode_t* messages,
     jnode_t* tool = tool_to_json(&tools[i]);
     jarray_add(jtools, tool);
   }
+  jnode_t* jthinking = jobject_new();
+  jobject_put(jbody, "thinking", jthinking);
+  {
+    const char* thinking = model->thinking ? "enabled" : "disabled";
+    jobject_put(jthinking, "type", jstring_new(0, thinking));
+  }
+  if (model->reasoning_effort) {
+    jobject_put(jthinking, "reasoning_effort",
+                jstring_new(0, model->reasoning_effort));
+  }
   char* body = jto_string(jbody);
   jdelete(jbody);
   log(DEBUG, "Request body: %s", body);
@@ -97,11 +107,11 @@ static char* call_openai_api(const model_t* model, jnode_t* messages,
   return data;
 }
 
-char* call_api(const model_t* model, protocol_t protocol, jnode_t* messages,
-               const tool_t* tools, size_t n_tools) {
+char* call_api(const model_t* model, jnode_t* messages, const tool_t* tools,
+               size_t n_tools) {
   log(INFO, "Calling API for model %s with protocol %s", model->name,
-      protocol_names[protocol]);
-  switch (protocol) {
+      protocol_names[model->protocol]);
+  switch (model->protocol) {
     case OPENAI: return call_openai_api(model, messages, tools, n_tools);
     case ANTHROPIC:
       log(ERROR, "Anthropic protocol not implemented yet");
