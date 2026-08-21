@@ -3,9 +3,12 @@
  ***********************/
 
 static const model_t model = {
+    .protocol = OPENAI,
     .name = "deepseek-v4-flash",
     .base_url = "https://api.deepseek.com/v1",
     .api_key = NULL,  // Set your API key here
+    .thinking = true,
+    .reasoning_effort = "high",
 };
 
 /***********************
@@ -29,11 +32,13 @@ static const tool_t tools[] = {
         DEFINE_PARAM(false, "limit", "integer",
                      "The number of lines to read. Defaults to reading the "
                      "entire file.")),
+
     DEFINE_TOOL(
         "Write", "Write contents to a file.", write_tool,
         DEFINE_PARAM(true, "path", "string", "The path to the file to write."),
         DEFINE_PARAM(true, "contents", "string",
                      "The contents to write to the file.")),
+
     DEFINE_TOOL("Bash", "Execute a bash command and return its output.",
                 bash_tool,
                 DEFINE_PARAM(true, "command", "string",
