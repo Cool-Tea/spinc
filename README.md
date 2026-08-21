@@ -2,7 +2,7 @@
 
 A minimal AI agent written in C. `spinc` connects to any OpenAI-compatible Chat Completions API, sends your prompt along with a set of tools, and automatically executes tool calls in a loop until the model produces a final answer.
 
-## Design Principle
+## Design Pilosophy
 
 Inspired by [suckless](https://suckless.org), the agent is designed to be simple to modify. **If you want new feature, write yourself and enjoy your labor!**
 
