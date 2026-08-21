@@ -9,6 +9,7 @@ static const model_t model = {
     .api_key = NULL,  // Set your API key here
     .thinking = true,
     .reasoning_effort = "high",
+    .top_p = 0.1f,
 };
 
 /***********************

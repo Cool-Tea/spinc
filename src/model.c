@@ -78,6 +78,7 @@ static char* call_openai_api(const model_t* model, jnode_t* messages,
     jobject_put(jthinking, "reasoning_effort",
                 jstring_new(0, model->reasoning_effort));
   }
+  jobject_put(jthinking, "top_p", jnumber_new(model->top_p));
   char* body = jto_string(jbody);
   jdelete(jbody);
   log(DEBUG, "Request body: %s", body);

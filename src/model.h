@@ -7,11 +7,12 @@
 
 #include "tool.h"
 
-typedef enum protocol { OPENAI, ANTHROPIC } protocol_t;
+typedef enum protocol : unsigned char { OPENAI, ANTHROPIC } protocol_t;
 
 typedef struct model {
   protocol_t protocol;
   bool thinking;
+  float top_p;
   const char* name;
   const char* base_url;
   const char* api_key;
