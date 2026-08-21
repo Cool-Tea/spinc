@@ -79,7 +79,7 @@ char* read_tool(const char* args_str) {
   TOOL_CHECK(read, contents, "Failed to allocate memory for file contents");
   jobject_put(result, "contents", contents);
 
-  size_t offset = 0;
+  size_t offset = 1;
   if (offset_node) {
     offset = (size_t)jas_number(offset_node)->value;
   }
@@ -92,27 +92,23 @@ char* read_tool(const char* args_str) {
   size_t lineno = 1, last_lineno = 0;
   char buf[1024];
   // skip lines until offset
-  while (fgets(buf, sizeof(buf), f) != NULL && lineno < offset) {
-    if (strchr(buf, '\n')) {
-      last_lineno = lineno;
-      ++lineno;
-    }
+  while (lineno < offset && fgets(buf, sizeof(buf), f) != NULL) {
+    last_lineno = lineno;
+    if (strchr(buf, '\n')) ++lineno;
   }
   TOOL_CHECK(
       read, !feof(f),
       "Parameter 'offset' exceeds the number of lines (%zu lines) in the file",
       last_lineno);
-  while (fgets(buf, sizeof(buf), f) != NULL && lineno < end_lineno &&
-         jstring_len(contents) < READ_TOOL_MAX_SIZE) {
+  while (lineno < end_lineno && jstring_len(contents) < READ_TOOL_MAX_SIZE &&
+         fgets(buf, sizeof(buf), f) != NULL) {
     if (lineno > last_lineno) {
       char linebuf[32];
       snprintf(linebuf, sizeof(linebuf), "%8zu: ", lineno);
       jstring_concat(contents, linebuf);
     }
-    if (strchr(buf, '\n')) {
-      last_lineno = lineno;
-      ++lineno;
-    }
+    last_lineno = lineno;
+    if (strchr(buf, '\n')) ++lineno;
     jstring_concat(contents, buf);
   }
 
@@ -127,6 +123,9 @@ char* read_tool(const char* args_str) {
     snprintf(buf, sizeof(buf), "Continue reading from line %zu.", last_lineno);
     jstring_concat(warning, buf);
   }
+
+  log(INFO, "Read %zu lines from file: %s", last_lineno, path);
+  log(DEBUG, "Read content:\n%s", jstring_content(contents));
 
 read_end:
   if (f) fclose(f);
