@@ -40,6 +40,20 @@ static const tool_t tools[] = {
         DEFINE_PARAM(true, "contents", "string",
                      "The contents to write to the file.")),
 
+    DEFINE_TOOL(
+        "Edit",
+        "Edit an existing file by replacing exact old contents with new "
+        "contents.",
+        edit_tool,
+        DEFINE_PARAM(true, "path", "string", "The path to the file to edit."),
+        DEFINE_PARAM(true, "old_string", "string",
+                     "The string to replace for in the file."),
+        DEFINE_PARAM(true, "new_string", "string",
+                     "The new string to replace with in the file."),
+        DEFINE_PARAM(false, "replace_all", "boolean",
+                     "Whether to replace all occurrences of the old string. "
+                     "Defaults to false.")),
+
     DEFINE_TOOL("Bash", "Execute a bash command and return its output.",
                 bash_tool,
                 DEFINE_PARAM(true, "command", "string",
