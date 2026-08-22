@@ -136,7 +136,6 @@ char* read_tool(const char* args_str) {
   }
 
   log(INFO, "Read %zu lines from file: %s", lineno - offset + 1, path);
-  log(DEBUG, "Read content:\n%s", jstring_content(contents));
 
 read_end:
   if (line) free(line);
