@@ -74,3 +74,10 @@ static const char* system_prompt =
     "You must not execute any bash commands that are not safe. You must not "
     "execute any bash commands that are not necessary to fulfill the user's "
     "request.";
+
+/***********
+ * Logging *
+ ***********/
+
+static enum log_level log_level = DEBUG;
+static const char* log_dir = ".spinc/logs";

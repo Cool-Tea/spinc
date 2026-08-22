@@ -2,7 +2,7 @@
 
 A minimal AI agent written in C. `spinc` connects to any OpenAI-compatible Chat Completions API, sends your prompt along with a set of tools, and automatically executes tool calls in a loop until the model produces a final answer.
 
-## Design Pilosophy
+## Design Philosophy
 
 Inspired by [suckless](https://suckless.org), the agent is designed to be simple to modify. **If you want new feature, write yourself and enjoy your labor!**
 
@@ -28,7 +28,7 @@ spinc/
 │   ├── message.c/h     # Chat message (system/user/assistant/tool) builders
 │   ├── config.def.h    # Config template (copy to config.h)
 │   ├── config.h        # Your local config (gitignored)
-│   ├── log.h           # Logging macros
+│   ├── log.c/h         # Logging (macros, init, log levels)
 │   ├── sjson.c/h       # Bundled JSON library
 │   └── dynarr.h        # Generic dynamic array macros
 └── spinc               # Built binary (output of `make`)
@@ -99,19 +99,32 @@ static const model_t model = {
 
 Tools are declared with the `DEFINE_TOOL` / `DEFINE_PARAM` macros and implemented in `src/tools.c`. By default the following tools are registered:
 
-| Tool    | Description                                                         | Parameters                                                                                                |
-| ------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `Read`  | Read a file and return its contents with line numbers               | `path` (string, required), `offset` (integer, optional, default `1`), `limit` (integer, optional)         |
-| `Write` | Create a new file or overwrite an existing file                     | `path`, `contents` (string, required)                                                                     |
-| `Edit`  | Edit an existing file by replacing exact old contents with new ones | `path`, `old_string`, `new_string` (string, required), `replace_all` (boolean, optional, default `false`) |
-| `Bash`  | Execute a bash command and return its output                        | `command` (string, required)                                                                              |
+| Tool    | Description                                                             | Parameters                                                                                                |
+| ------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `Read`  | Read a file and return its contents with line numbers                   | `path` (string, required), `offset` (integer, optional, default `1`), `limit` (integer, optional)         |
+| `Write` | Create a new file or overwrite an existing file                         | `path`, `contents` (string, required)                                                                     |
+| `Edit`  | Edit an existing file by replacing exact old contents with new contents | `path`, `old_string`, `new_string` (string, required), `replace_all` (boolean, optional, default `false`) |
+| `Bash`  | Execute a bash command and return its output                            | `command` (string, required)                                                                              |
 
 #### Adding a tool
-Implement a `char* foo_tool(const char* args_json)` function in `src/tools.c`, declare it in `config.h`, and register it in the `tools[]` array with `DEFINE_TOOL`. Tool functions receive a JSON string of the arguments and return a JSON string of the result.
+
+Implement a `char* foo_tool(const char* params)` function in `src/tools.c`, declare it in `config.h` (e.g. `extern char* foo_tool(const char* params);`), and register it in the `tools[]` array with `DEFINE_TOOL`. Tool functions receive a JSON string of the arguments and return a JSON string of the result.
 
 ### System prompt
 
 The model's system prompt is defined as `system_prompt` in `src/config.h`.
+
+### Logging
+
+Logging is configured at the bottom of `src/config.h`:
+
+```c
+static enum log_level log_level = DEBUG;
+static const char* log_dir = ".spinc/logs";
+```
+
+- `log_level` — the minimum level to emit. Valid values, in increasing verbosity order, are `ALL`, `DEBUG`, `INFO`, `WARN`, `ERROR`, and `DISABLE` (see `src/log.h`).
+- `log_dir` — the directory where log files are written.
 
 ## Usage
 

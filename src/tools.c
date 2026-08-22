@@ -92,10 +92,10 @@ char* read_tool(const char* args_str) {
     end_lineno = offset + (size_t)jas_number(limit_node)->value;
   }
 
-  int linelen = 0;
+  int line_len = 0;
   size_t lineno = 1, linecap = 0;
   // skip lines until offset
-  while (lineno < offset && (linelen = getline(&line, &linecap, f)) > 0) {
+  while (lineno < offset && (line_len = getline(&line, &linecap, f)) > 0) {
     ++lineno;
   }
   TOOL_CHECK(
@@ -103,16 +103,16 @@ char* read_tool(const char* args_str) {
       "Parameter 'offset' exceeds the number of lines (%zu lines) in the file",
       lineno);
 
-  char linebuf[256];
-  int lineno_len = snprintf(linebuf, sizeof(linebuf), "%zu", lineno) + 4;
+  char line_buf[256];
+  int lineno_len = snprintf(line_buf, sizeof(line_buf), "%zu", lineno) + 4;
 
   bool partial_read = false;
   while (lineno < end_lineno && jstring_len(contents) < READ_TOOL_MAX_SIZE &&
-         (linelen = getline(&line, &linecap, f)) > 0) {
-    snprintf(linebuf, sizeof(linebuf), "%*zu: ", lineno_len, lineno);
-    jstring_concat(contents, linebuf);
-    size_t read_len = linelen;
-    if (jstring_len(contents) + linelen >= READ_TOOL_MAX_SIZE) {
+         (line_len = getline(&line, &linecap, f)) > 0) {
+    snprintf(line_buf, sizeof(line_buf), "%*zu: ", lineno_len, lineno);
+    jstring_concat(contents, line_buf);
+    size_t read_len = line_len;
+    if (jstring_len(contents) + line_len >= READ_TOOL_MAX_SIZE) {
       read_len = READ_TOOL_MAX_SIZE - jstring_len(contents);
       partial_read = true;
     } else {
@@ -127,11 +127,12 @@ char* read_tool(const char* args_str) {
         jstring_new(0, "Incomplete Read: Read exceeded maximum size of 64KB. ");
     TOOL_CHECK(read, warning, "Failed to allocate memory for warning message");
     jobject_put(result, "warning", warning);
-    snprintf(linebuf, sizeof(linebuf), "Read %zu lines. ", lineno - offset + 1);
-    jstring_concat(warning, linebuf);
-    snprintf(linebuf, sizeof(linebuf), "Continue reading from line %zu.",
+    snprintf(line_buf, sizeof(line_buf), "Read %zu lines. ",
+             lineno - offset + 1);
+    jstring_concat(warning, line_buf);
+    snprintf(line_buf, sizeof(line_buf), "Continue reading from line %zu.",
              lineno);
-    jstring_concat(warning, linebuf);
+    jstring_concat(warning, line_buf);
   }
 
   log(INFO, "Read %zu lines from file: %s", lineno - offset + 1, path);
@@ -240,10 +241,10 @@ char* edit_tool(const char* args_str) {
   bool replace_all =
       replace_all_node ? jas_bool(replace_all_node)->value : false;
 
-  size_t pathlen = strlen(path);
-  filename = malloc(pathlen + 6);
+  size_t path_len = strlen(path);
+  filename = malloc(path_len + 6);
   TOOL_CHECK(edit, filename, "Failed to allocate memory for temp filename");
-  snprintf(filename, pathlen + 6, "%s.swap", path);
+  snprintf(filename, path_len + 6, "%s.swap", path);
 
   f = fopen(path, "rb");
   TOOL_CHECK(edit, f, "Failed to open file for reading: %s", path);
@@ -252,20 +253,20 @@ char* edit_tool(const char* args_str) {
   TOOL_CHECK(edit, swapf, "Failed to open temp file for writing: %s", filename);
 
   fseek(f, 0, SEEK_END);
-  size_t fsize = ftell(f);
+  size_t file_size = ftell(f);
   fseek(f, 0, SEEK_SET);
 
-  buf = malloc(fsize + 1);
+  buf = malloc(file_size + 1);
   TOOL_CHECK(edit, buf, "Failed to allocate memory for file contents");
-  size_t read_size = fread(buf, 1, fsize, f);
-  TOOL_CHECK(edit, read_size == fsize, "Failed to read file: %s", path);
-  buf[fsize] = '\0';
+  size_t read_size = fread(buf, 1, file_size, f);
+  TOOL_CHECK(edit, read_size == file_size, "Failed to read file: %s", path);
+  buf[file_size] = '\0';
 
   // Count occurrences of old_string in buf
-  size_t count = 0, oldstrlen = strlen(old_string),
-         newstrlen = strlen(new_string);
+  size_t count = 0, old_str_len = strlen(old_string),
+         new_str_len = strlen(new_string);
   for (const char* p = buf; (p = strstr(p, old_string)) != NULL;
-       p += oldstrlen) {
+       p += old_str_len) {
     count++;
   }
   TOOL_CHECK(edit, count > 0, "Old string not found in file: %s", path);
@@ -275,18 +276,18 @@ char* edit_tool(const char* args_str) {
              "correct one.",
              path);
 
-  for (const char *it = buf, *next; it < buf + fsize; it = next) {
+  for (const char *it = buf, *next; it < buf + file_size; it = next) {
     next = strstr(it, old_string);
-    if (!next) next = buf + fsize;
+    if (!next) next = buf + file_size;
     size_t copy_len = next - it;
     size_t write_len = fwrite(it, 1, copy_len, swapf);
     TOOL_CHECK(edit, write_len == copy_len, "Failed to write to temp file: %s",
                filename);
-    if (next < buf + fsize) {
-      write_len = fwrite(new_string, 1, newstrlen, swapf);
-      TOOL_CHECK(edit, write_len == newstrlen,
+    if (next < buf + file_size) {
+      write_len = fwrite(new_string, 1, new_str_len, swapf);
+      TOOL_CHECK(edit, write_len == new_str_len,
                  "Failed to write to temp file: %s", filename);
-      next += oldstrlen;
+      next += old_str_len;
     }
   }
 

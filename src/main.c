@@ -17,14 +17,19 @@ int main(int argc, char* argv[]) {
   const char* prompt = NULL;
   if (getopt(argc, argv, "p:") == 'p') prompt = optarg;
   if (!prompt) {
-    log(ERROR, "error: -p flag is required");
+    fprintf(stderr, "error: -p flag is required\n");
     return 1;
   }
 
   const char* base_url = model.base_url;
   const char* api_key = model.api_key;
   if (!base_url || !*base_url || !api_key || !*api_key) {
-    log(ERROR, "base_url or api_key is not set in config.h");
+    fprintf(stderr, "error: base_url or api_key is not set in config.h\n");
+    return 1;
+  }
+
+  if (!log_init(log_dir, log_level)) {
+    fprintf(stderr, "error: failed to initialize logging\n");
     return 1;
   }
 
@@ -113,5 +118,6 @@ int main(int argc, char* argv[]) {
 
   jdelete(jmessages);
   http_quit();
+  log_quit();
   return 0;
 }
