@@ -1,6 +1,6 @@
 # spinc
 
-A minimal AI agent written in C. `spinc` connects to any OpenAI-compatible Chat Completions API, sends your prompt along with a set of tools, and automatically executes tool calls in a loop until the model produces a final answer.
+A minimal AI agent written in C. `spinc` connects to any OpenAI-compatible Chat Completions API or the Anthropic Messages API, sends your prompt along with a set of tools, and automatically executes tool calls in a loop until the model produces a final answer.
 
 ## Design Philosophy
 
@@ -10,7 +10,7 @@ Inspired by [suckless](https://suckless.org), the agent is designed to be simple
 
 - **Pure C agent loop** — sends messages to the API, executes any requested tool calls, feeds the results back, and repeats until the model answers.
 - **Built-in tools** — `Read`, `Write`, `Edit`, and `Bash` let the model read files, write files, and run shell commands. **In fact, the README is written by this agent!**
-- **OpenAI-compatible** — works with any provider exposing the `/chat/completions` endpoint (e.g. DeepSeek). A protocol abstraction (`OPENAI`/`ANTHROPIC`) exists for future providers.
+- **Multi-protocol** — speaks both the OpenAI (`/chat/completions`) and Anthropic (`/v1/messages`) protocols behind a single abstraction, so it works with any OpenAI-compatible provider (e.g. DeepSeek) as well as Anthropic.
 - **Bundled JSON library** — ships with [sjson](https://github.com/Cool-Tea/sjson), a compact JSON parser/serializer.
 - **Colored logging** — per-file/function/line debug output, configurable at compile time.
 
@@ -20,17 +20,16 @@ Inspired by [suckless](https://suckless.org), the agent is designed to be simple
 spinc/
 ├── Makefile            # Build configuration
 ├── src/
-│   ├── main.c          # Agent loop & CLI entry point
-│   ├── model.c/h       # API request building (OpenAI protocol)
+│   ├── main.c          # CLI entry point
+│   ├── agent.c/h       # Agent loop & tool-call execution
+│   ├── model.c/h       # Protocol abstraction & API request building (OpenAI/Anthropic)
 │   ├── http.c/h        # libcurl HTTP POST wrapper
 │   ├── tools.c         # Tool implementations (Read/Write/Edit/Bash)
 │   ├── tool.h          # Tool/parameter definition macros & structs
-│   ├── message.c/h     # Chat message (system/user/assistant/tool) builders
 │   ├── config.def.h    # Config template (copy to config.h)
 │   ├── config.h        # Your local config (gitignored)
 │   ├── log.c/h         # Logging (macros, init, log levels)
-│   ├── sjson.c/h       # Bundled JSON library
-│   └── dynarr.h        # Generic dynamic array macros
+│   └── sjson.c/h       # Bundled JSON library
 └── spinc               # Built binary (output of `make`)
 ```
 
@@ -81,19 +80,21 @@ static const model_t model = {
     .name             = "deepseek-v4-flash",
     .base_url         = "https://api.deepseek.com",
     .api_key          = "your-api-key-here",   // <- set your key
-    .thinking         = true,
+    .thinking         = "enabled",
     .reasoning_effort = "high",
     .top_p            = 0.1f,
+    .max_tokens       = -1,
 };
 ```
 
 - `protocol` — the API protocol used (`OPENAI` or `ANTHROPIC`).
 - `name` — the model identifier sent in the request body.
-- `base_url` — any OpenAI-compatible API base URL.
-- `api_key` — the bearer token used for `Authorization: Bearer <key>`.
-- `thinking` — enable/disable the model's reasoning/thinking mode.
-- `reasoning_effort` — the reasoning effort level (e.g. `"low"`, `"medium"`, `"high"`).
+- `base_url` — the API base URL.
+- `api_key` — the secret used for authentication.
+- `thinking` — the model's reasoning/thinking mode as a string: `"enabled"`, `"disabled"` or `"adaptive"` (or `NULL` to omit the field).
+- `reasoning_effort` — the reasoning effort level.
 - `top_p` — nucleus sampling parameter sent with the request.
+- `max_tokens` — the maximum number of tokens to generate; `-1` to let the API use its default.
 
 ### Tools
 

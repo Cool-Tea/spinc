@@ -5,8 +5,8 @@ SRCS = $(shell find $(SRC_DIR) -name '*.c')
 OBJS = $(SRCS:.c=.o)
 TARGET = $(ROOT)/spinc
 
-CFLAGS  := -Wall -Wextra -std=gnu23 -O2 -g -fsanitize=address
-LDFLAGS := -lcurl -fsanitize=address
+CFLAGS  := -Wall -Wextra -std=gnu23 -O2 -g -fsanitize=address -fno-omit-frame-pointer
+LDFLAGS := -lcurl -fsanitize=address -fno-omit-frame-pointer
 
 all: $(TARGET)
 

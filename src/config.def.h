@@ -5,11 +5,12 @@
 static const model_t model = {
     .protocol = OPENAI,
     .name = "deepseek-v4-flash",
-    .base_url = "https://api.deepseek.com/v1",
+    .base_url = "https://api.deepseek.com",
     .api_key = NULL,  // Set your API key here
-    .thinking = true,
+    .thinking = "enabled",
     .reasoning_effort = "high",
     .top_p = 0.1f,
+    .max_tokens = -1,
 };
 
 /***********************
@@ -19,6 +20,7 @@ static const model_t model = {
 // tool functions (implemented in tools.c)
 extern char* read_tool(const char* params);
 extern char* write_tool(const char* params);
+extern char* edit_tool(const char* params);
 extern char* bash_tool(const char* params);
 
 // tool definitions
@@ -66,10 +68,10 @@ static const size_t n_tool = sizeof(tools) / sizeof(tool_t);
  *****************/
 
 static const char* system_prompt =
-    "You are a helpful assistant. You can call tools to read and write files, "
-    "and execute bash commands. You must always use the tools when you need "
-    "to read or write files, or execute bash commands. You must not make any "
-    "assumptions about the file system or the environment. You must not "
+    "You are a helpful assistant. You can call tools to read, write and edit "
+    "files, and execute bash commands. You must always use the tools when you "
+    "need to read or write files, or execute bash commands. You must not make "
+    "any assumptions about the file system or the environment. You must not "
     "execute any bash commands that are not explicitly requested by the user. "
     "You must not execute any bash commands that are not safe. You must not "
     "execute any bash commands that are not necessary to fulfill the user's "
