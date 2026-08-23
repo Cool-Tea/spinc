@@ -42,21 +42,10 @@ spinc/
 ## Build
 
 ```sh
-make
-```
-
-The default build enables AddressSanitizer for safer debugging:
-
-```makefile
-CFLAGS  := -Wall -Wextra -std=gnu23 -O2 -g -fsanitize=address
-LDFLAGS := -lcurl -fsanitize=address
-```
-
-To build a release binary, change the flags in the `Makefile`:
-
-```makefile
-CFLAGS  := -Wall -Wextra -std=gnu23 -O2 -DLOG_LEVEL=INFO
-LDFLAGS := -lcurl
+make          # release build and debug build
+make all      # release build and debug build
+make release  # release build
+make debug    # debug build
 ```
 
 Clean up build artifacts with `make clean`.
