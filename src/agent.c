@@ -40,10 +40,10 @@ bool agent_run(agent_t* agent, const char* user_input) {
 
     running = !resp->finished;
     if (resp->reasoning) {
-      printf("[Reasoning] %s\n", resp->reasoning);
+      printf("\033[2m[Reasoning] %s\033[0m\n", resp->reasoning);
     }
     if (resp->content) {
-      printf("%s\n", resp->content);
+      printf("\033[1m%s\033[0m\n", resp->content);
     }
     if (resp->n_tool_call) {
       for (size_t i = 0; i < resp->n_tool_call; ++i) {
@@ -64,7 +64,7 @@ bool agent_run(agent_t* agent, const char* user_input) {
           context_add_tool_message(&agent->ctx, id, name,
                                    "{\"error\": \"Tool not found\"}");
         } else {
-          printf("[Tool Call] %s\n", name);
+          printf("\033[2m[Tool Call] %s\033[0m\n", name);
           char* result = tool->func(args);
           log(DEBUG, "Tool '%s' returned: %s", tool->def.name, result);
           context_add_tool_message(&agent->ctx, id, name, result);

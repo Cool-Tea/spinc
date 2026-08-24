@@ -30,7 +30,10 @@ $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 $(SRC_DIR)/%.o.debug: $(SRC_DIR)/%.c
 	$(CC) $(DEBUG_CFLAGS) -c -o $@ $<
 
+run: $(TARGET)
+	@$(TARGET)
+
 clean:
 	rm -f $(OBJS) $(TARGET) $(DEBUG_OBJS) $(DEBUG_TARGET)
 
-.PHONY: clean
+.PHONY: clean release debug run

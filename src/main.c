@@ -1,4 +1,7 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "log.h"
@@ -7,11 +10,25 @@
 
 #include "config.h"
 
+typedef struct cmdopts {
+  const char* prompt;
+} cmdopts_t;
+
+static cmdopts_t cmdopts = {0};
+
+static bool parse_options(int argc, char* argv[]) {
+  int opt;
+  while ((opt = getopt(argc, argv, "p:")) != -1) {
+    switch (opt) {
+      case 'p': cmdopts.prompt = optarg; break;
+      default: break;
+    }
+  }
+  return true;
+}
+
 int main(int argc, char* argv[]) {
-  const char* prompt = NULL;
-  if (getopt(argc, argv, "p:") == 'p') prompt = optarg;
-  if (!prompt) {
-    fprintf(stderr, "error: -p flag is required\n");
+  if (!parse_options(argc, argv)) {
     return 1;
   }
 
@@ -38,10 +55,27 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  agent_run(agent, prompt);
+  bool success = true;
+  if (cmdopts.prompt) {
+    success = agent_run(agent, cmdopts.prompt);
+  } else {
+    int line_len = 0;
+    size_t line_cap = 0;
+    char* line = NULL;
+    while (1) {
+      printf("\033[1;36muser\033[1;32m>\033[0m ");
+      fflush(stdout);
+      line_len = getline(&line, &line_cap, stdin);
+      if (line_len == -1) continue;
+      if (strncmp(line, "/exit", 5) == 0 || strncmp(line, "/quit", 5) == 0)
+        break;
+      success = agent_run(agent, line);
+    }
+    if (line) free(line);
+  }
 
   agent_delete(agent);
   http_quit();
   log_quit();
-  return 0;
+  return !success;
 }
