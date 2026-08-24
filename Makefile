@@ -8,9 +8,9 @@ TARGET       = $(ROOT)/spinc
 DEBUG_TARGET = $(ROOT)/spinc_debug
 
 DEBUG_CFLAGS  := -Wall -Wextra -std=gnu23 -O0 -g -fsanitize=address -fno-omit-frame-pointer
-DEBUG_LDFLAGS := -lcurl -fsanitize=address -fno-omit-frame-pointer
+DEBUG_LDFLAGS := -lcurl -lreadline -fsanitize=address -fno-omit-frame-pointer
 CFLAGS  := -std=gnu23 -O2
-LDFLAGS := -lcurl
+LDFLAGS := -lcurl -lreadline
 
 all: $(TARGET) $(DEBUG_TARGET)
 

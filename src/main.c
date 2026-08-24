@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
+#include <readline/readline.h>
 
 #include "log.h"
 #include "http.h"
@@ -59,19 +60,14 @@ int main(int argc, char* argv[]) {
   if (cmdopts.prompt) {
     success = agent_run(agent, cmdopts.prompt);
   } else {
-    int line_len = 0;
-    size_t line_cap = 0;
-    char* line = NULL;
     while (1) {
-      printf("\033[1;36muser\033[1;32m>\033[0m ");
-      fflush(stdout);
-      line_len = getline(&line, &line_cap, stdin);
-      if (line_len == -1) continue;
+      char* line = readline("\033[1;36muser\033[1;32m>\033[0m ");
+      if (!line) continue;
       if (strncmp(line, "/exit", 5) == 0 || strncmp(line, "/quit", 5) == 0)
         break;
       success = agent_run(agent, line);
+      if (line) free(line);
     }
-    if (line) free(line);
   }
 
   agent_delete(agent);

@@ -36,7 +36,8 @@ spinc/
 ## Requirements
 
 - A C23 compiler (the code is built with `-std=gnu23`)
-- [libcurl](https://curl.se/libcurl/) development headers
+- [libcurl](https://curl.se/libcurl/)
+- [readline](https://tiswww.case.edu/php/chet/readline/rltop.html)
 - `make`
 
 ## Build
@@ -118,7 +119,7 @@ static const char* log_dir = ".spinc/logs";
 
 ## Usage
 
-`spinc` takes a single required flag, `-p`, with your prompt:
+Run `spinc` with the optional `-p` flag to pass a single prompt and exit:
 
 ```sh
 ./spinc -p "What files are in this directory?"
@@ -126,6 +127,15 @@ static const char* log_dir = ".spinc/logs";
 
 ```sh
 ./spinc -p "Write a sentence introducing yourself to the file ./doc.txt"
+```
+
+Without `-p`, `spinc` starts an interactive REPL. Type prompts at the `user>` prompt, and quit with `/exit` or `/quit`:
+
+```sh
+$ ./spinc # or make run
+user> What files are in this directory?
+...
+user> /exit
 ```
 
 The agent will:
