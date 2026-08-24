@@ -235,9 +235,11 @@ static mdres_t* openai_parse(char* response) {
   res->finished = (strcmp(res->stop_reason, "stop") == 0);
   jnode_t* jmessage = jobject_get(jfirst, "message");
   jnode_t* jreasoning = jobject_get(jmessage, "reasoning_content");
-  if (jreasoning) res->reasoning = jstring_content(jreasoning);
+  if (jreasoning && jstring_len(jreasoning))
+    res->reasoning = jstring_content(jreasoning);
   jnode_t* jcontent = jobject_get(jmessage, "content");
-  if (jcontent) res->content = jstring_content(jcontent);
+  if (jcontent && jstring_len(jcontent))
+    res->content = jstring_content(jcontent);
   jnode_t* jtool_calls = jobject_get(jmessage, "tool_calls");
   if (jtool_calls) {
     res->n_tool_call = jarray_size(jtool_calls);
