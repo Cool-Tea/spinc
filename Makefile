@@ -1,6 +1,7 @@
 ROOT    := $(shell pwd)
 SRC_DIR := $(ROOT)/src
 
+CONFIG = $(SRC_DIR)/config.h
 SRCS = $(shell find $(SRC_DIR) -name '*.c')
 OBJS = $(SRCS:.c=.o)
 DEBUG_OBJS = $(SRCS:.c=.o.debug)
@@ -24,10 +25,10 @@ $(TARGET): $(OBJS)
 $(DEBUG_TARGET): $(DEBUG_OBJS)
 	$(CC) $(DEBUG_LDFLAGS) -o $@ $^
 
-$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
+$(SRC_DIR)/%.o: $(SRC_DIR)/%.c $(CONFIG)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(SRC_DIR)/%.o.debug: $(SRC_DIR)/%.c
+$(SRC_DIR)/%.o.debug: $(SRC_DIR)/%.c $(CONFIG)
 	$(CC) $(DEBUG_CFLAGS) -c -o $@ $<
 
 run: $(TARGET)
