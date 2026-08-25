@@ -16,7 +16,7 @@
     }                                                                    \
   } while (0)
 
-#define DEBUG_PREFIX "\033[3;36m [DEBUG]"
+#define DEBUG_PREFIX "\033[2;36m [DEBUG]"
 #define INFO_PREFIX "\033[0;37m [INFO]"
 #define WARN_PREFIX "\033[1;33m [WARN]"
 #define ERROR_PREFIX "\033[1;31m [ERROR]"

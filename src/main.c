@@ -36,12 +36,15 @@ int main(int argc, char* argv[]) {
   const char* base_url = model.base_url;
   const char* api_key = model.api_key;
   if (!base_url || !*base_url || !api_key || !*api_key) {
-    fprintf(stderr, "error: base_url or api_key is not set in config.h\n");
+    fprintf(stderr,
+            " \033[1;31m[ERROR] base_url or api_key is not set in "
+            "config.h\033[0m\n");
     return 1;
   }
 
   if (!log_init(log_dir, log_level)) {
-    fprintf(stderr, "error: failed to initialize logging\n");
+    fprintf(stderr,
+            " \033[1;31m[ERROR] error: failed to initialize logging\033[0m\n");
     return 1;
   }
 
