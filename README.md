@@ -18,19 +18,20 @@ Inspired by [suckless](https://suckless.org), the agent is designed to be simple
 
 ```
 spinc/
+├── .gitignore          # gitignore file
+├── LICENSE             # MIT LICENSE
 ├── Makefile            # Build configuration
-├── src/
-│   ├── main.c          # CLI entry point
-│   ├── agent.c/h       # Agent loop & tool-call execution
-│   ├── model.c/h       # Protocol abstraction & API request building (OpenAI/Anthropic)
-│   ├── http.c/h        # libcurl HTTP POST wrapper
-│   ├── tools.c         # Tool implementations (Read/Write/Edit/Bash)
-│   ├── tool.h          # Tool/parameter definition macros & structs
-│   ├── config.def.h    # Config template (copy to config.h)
-│   ├── config.h        # Your local config (gitignored)
-│   ├── log.c/h         # Logging (macros, init, log levels)
-│   └── sjson.c/h       # Bundled JSON library
-└── spinc               # Built binary (output of `make`)
+└── src/
+    ├── main.c          # CLI entry point
+    ├── agent.c/h       # Agent loop & tool-call execution
+    ├── model.c/h       # Protocol abstraction & API request building (OpenAI/Anthropic)
+    ├── http.c/h        # libcurl HTTP POST wrapper
+    ├── tools.c         # Tool implementations (Read/Write/Edit/Bash)
+    ├── tool.h          # Tool/parameter definition macros & structs
+    ├── config.def.h    # Config template (copy to config.h)
+    ├── config.h        # Your local config (gitignored)
+    ├── log.c/h         # Logging (macros, init, log levels)
+    └── sjson.c/h       # Bundled JSON library
 ```
 
 ## Requirements
