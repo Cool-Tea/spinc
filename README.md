@@ -11,6 +11,7 @@ Inspired by [suckless](https://suckless.org), the agent is designed to be simple
 - **Pure C agent loop** — sends messages to the API, executes any requested tool calls, feeds the results back, and repeats until the model answers.
 - **Built-in tools** — `Read`, `Write`, `Edit`, and `Bash` let the model read files, write files, and run shell commands. **In fact, the README is written by this agent!**
 - **Multi-protocol** — speaks both the OpenAI (`/chat/completions`) and Anthropic (`/v1/messages`) protocols behind a single abstraction, so it works with any OpenAI-compatible provider (e.g. DeepSeek) as well as Anthropic.
+- **Streaming** — token-by-token streaming via Server-Sent Events for both protocols, so reasoning and answers appear as they are generated instead of waiting for the full response.
 - **Bundled JSON library** — ships with [sjson](https://github.com/Cool-Tea/sjson), a compact JSON parser/serializer.
 - **Colored logging** — per-file/function/line debug output, configurable at compile time.
 
@@ -75,6 +76,7 @@ static const model_t model = {
     .reasoning_effort = "high",
     .top_p            = 0.1f,
     .max_tokens       = -1,
+    .stream           = false,
 };
 ```
 
@@ -86,6 +88,7 @@ static const model_t model = {
 - `reasoning_effort` — the reasoning effort level.
 - `top_p` — nucleus sampling parameter sent with the request.
 - `max_tokens` — the maximum number of tokens to generate; `-1` to let the API use its default.
+- `stream` — set to `true` to enable streaming mode: the model's reasoning and answer are printed incrementally as they are generated instead of after the full response arrives. Works for both `OPENAI` and `ANTHROPIC` protocols.
 
 ### Tools
 
@@ -145,6 +148,8 @@ The agent will:
 2. If the model responds with tool calls, execute each tool locally.
 3. Append the tool results to the conversation and call the API again.
 4. Repeat until the model returns a plain text answer (no tool calls), which is printed to stdout.
+
+With `stream = true` in `src/config.h`, the API is called in streaming mode: reasoning and answer text are printed as they are generated, and tool calls are still executed within the same loop.
 
 ## Note
 
