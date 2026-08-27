@@ -8,7 +8,7 @@ DEBUG_OBJS = $(SRCS:.c=.o.debug)
 TARGET       = $(ROOT)/spinc
 DEBUG_TARGET = $(ROOT)/spinc_debug
 
-DEBUG_CFLAGS  := -Wall -Wextra -std=gnu23 -O0 -g -fsanitize=address -fno-omit-frame-pointer
+DEBUG_CFLAGS  := -Wall -Wextra -std=gnu23 -O0 -g -fsanitize=address -fno-omit-frame-pointer -DLOG_LEVEL=DEBUG
 DEBUG_LDFLAGS := -lcurl -lreadline -fsanitize=address -fno-omit-frame-pointer
 CFLAGS  := -std=gnu23 -O2
 LDFLAGS := -lcurl -lreadline
