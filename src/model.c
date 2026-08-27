@@ -127,6 +127,112 @@ void context_update(context_t* ctx, const mdlres_t* res) {
   }
 }
 
+static void anthropic_context_update_stream(context_t* ctx,
+                                            const mdlres_t* res) {
+  jnode_t* json = res->json;
+  if (!json) return;
+  jnode_t* jtype = jobject_get(json, "type");
+  if (jis_empty(jtype)) return;
+  const char* type = jstring_content(jtype);
+
+  if (strcmp(type, "message_start") == 0) {
+    // A new assistant message begins; create its shell so subsequent
+    // content_block_* events can fill it in.
+    jnode_t* jmessage = jobject_new();
+    jobject_put(jmessage, "role", jstring_new(0, "assistant"));
+    jobject_put(jmessage, "content", jarray_new());
+    jarray_add(ctx->messages, jmessage);
+    return;
+  }
+
+  jnode_t* jindex = jobject_get(json, "index");
+  if (jis_empty(jindex)) return;
+  int index = jas_number(jindex)->value;
+
+  jnode_t* jlast_msg =
+      jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
+  jnode_t* jcontent = jobject_get(jlast_msg, "content");
+
+  if (strcmp(type, "content_block_start") == 0) {
+    jnode_t* jcontent_block = jobject_get(json, "content_block");
+    if (jis_empty(jcontent_block)) return;
+    jnode_t* jblock = jcopy(jcontent_block);
+    // tool_use input arrives as input_json_delta fragments, so accumulate
+    // them as a string until the block is complete.
+    jnode_t* jblock_type = jobject_get(jblock, "type");
+    if (!jis_empty(jblock_type) &&
+        strcmp(jstring_content(jblock_type), "tool_use") == 0) {
+      jobject_put(jblock, "input", jstring_new(0, ""));
+    }
+    if (index >= jarray_size(jcontent)) {
+      jarray_add(jcontent, jblock);
+    } else {
+      jarray_remove(jcontent, index);
+      if (index >= jarray_size(jcontent)) {
+        jarray_add(jcontent, jblock);
+      } else {
+        jarray_insert(jcontent, index, jblock);
+      }
+    }
+    return;
+  }
+
+  if (index >= jarray_size(jcontent)) return;
+  jnode_t* jblock = jarray_get(jcontent, index);
+
+  if (strcmp(type, "content_block_delta") == 0) {
+    jnode_t* jdelta = jobject_get(json, "delta");
+    if (jis_empty(jdelta)) return;
+    jnode_t* jdelta_type = jobject_get(jdelta, "type");
+    if (jis_empty(jdelta_type)) return;
+    const char* delta_type = jstring_content(jdelta_type);
+    if (strcmp(delta_type, "text_delta") == 0) {
+      jnode_t* jtext = jobject_get(jdelta, "text");
+      if (jis_empty(jtext)) return;
+      jnode_t* jblock_text = jobject_get(jblock, "text");
+      if (jis_empty(jblock_text)) {
+        jobject_put(jblock, "text", jcopy(jtext));
+      } else {
+        jstring_concat(jblock_text, jstring_content(jtext));
+      }
+    } else if (strcmp(delta_type, "thinking_delta") == 0) {
+      jnode_t* jthinking = jobject_get(jdelta, "thinking");
+      if (jis_empty(jthinking)) return;
+      jnode_t* jblock_thinking = jobject_get(jblock, "thinking");
+      if (jis_empty(jblock_thinking)) {
+        jobject_put(jblock, "thinking", jcopy(jthinking));
+      } else {
+        jstring_concat(jblock_thinking, jstring_content(jthinking));
+      }
+    } else if (strcmp(delta_type, "input_json_delta") == 0) {
+      jnode_t* jpartial = jobject_get(jdelta, "partial_json");
+      if (jis_empty(jpartial)) return;
+      jnode_t* jinput = jobject_get(jblock, "input");
+      if (jis_empty(jinput)) {
+        jobject_put(jblock, "input", jcopy(jpartial));
+      } else {
+        jstring_concat(jinput, jstring_content(jpartial));
+      }
+    }
+    return;
+  }
+
+  if (strcmp(type, "content_block_stop") == 0) {
+    // The accumulated tool_use input string is now complete JSON; turn it
+    // into a real object so the context can be sent back to the API.
+    jnode_t* jblock_type = jobject_get(jblock, "type");
+    if (jis_empty(jblock_type)) return;
+    if (strcmp(jstring_content(jblock_type), "tool_use") != 0) return;
+    jnode_t* jinput = jobject_get(jblock, "input");
+    if (jis_string(jinput)) {
+      jnode_t* jparsed = jfrom_string(jstring_content(jinput));
+      jobject_put(jblock, "input",
+                  jparsed ? jparsed : jobject_new());
+    }
+    return;
+  }
+}
+
 static void openai_context_update_stream(context_t* ctx, const mdlres_t* res) {
   jnode_t* json = res->json;
   jnode_t* jchoices = jobject_get(json, "choices");
@@ -224,9 +330,7 @@ static void openai_context_update_stream(context_t* ctx, const mdlres_t* res) {
 void context_update_stream(context_t* ctx, const mdlres_t* res) {
   switch (ctx->protocol) {
     case OPENAI: openai_context_update_stream(ctx, res); break;
-    case ANTHROPIC:
-      log(ERROR, "Stream updates not supported for Anthropic");
-      break;
+    case ANTHROPIC: anthropic_context_update_stream(ctx, res); break;
   }
 }
 
@@ -274,14 +378,54 @@ size_t openai_context_get_last_message_tool_calls(context_t* ctx,
   return n_tool_calls;
 }
 
+static size_t anthropic_context_get_last_message_tool_calls(
+    context_t* ctx, tool_call_t** calls) {
+  jnode_t* jlast_msg =
+      jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
+  jnode_t* jcontent = jobject_get(jlast_msg, "content");
+  if (jis_empty(jcontent)) return 0;
+
+  size_t n_content = jarray_size(jcontent);
+  size_t n_tool_calls = 0;
+  for (size_t i = 0; i < n_content; ++i) {
+    jnode_t* jitem = jarray_get(jcontent, i);
+    jnode_t* jtype = jobject_get(jitem, "type");
+    if (!jis_empty(jtype) &&
+        strcmp(jstring_content(jtype), "tool_use") == 0) {
+      n_tool_calls++;
+    }
+  }
+  if (n_tool_calls == 0) return 0;
+
+  *calls = malloc(n_tool_calls * sizeof(tool_call_t));
+  if (!*calls) return 0;
+
+  size_t tool_index = 0;
+  for (size_t i = 0; i < n_content; ++i) {
+    jnode_t* jitem = jarray_get(jcontent, i);
+    jnode_t* jtype = jobject_get(jitem, "type");
+    if (strcmp(jstring_content(jtype), "tool_use")) continue;
+    jnode_t* jid = jobject_get(jitem, "id");
+    jnode_t* jname = jobject_get(jitem, "name");
+    jnode_t* jinput = jobject_get(jitem, "input");
+    (*calls)[tool_index].id = jstring_content(jid);
+    (*calls)[tool_index].name = jstring_content(jname);
+    (*calls)[tool_index].args =
+        jis_string(jinput) ? strdup(jstring_content(jinput))
+                           : jto_string(jinput);
+    ++tool_index;
+  }
+  return n_tool_calls;
+}
+
 size_t context_get_last_message_tool_calls(context_t* ctx,
                                            tool_call_t** calls) {
   switch (ctx->protocol) {
     case OPENAI: return openai_context_get_last_message_tool_calls(ctx, calls);
     case ANTHROPIC:
-      log(ERROR, "Tool calls not supported for Anthropic");
-      return 0;
+      return anthropic_context_get_last_message_tool_calls(ctx, calls);
   }
+  return 0;
 }
 
 static mdlres_t* model_response_new() {
@@ -604,6 +748,9 @@ static jnode_t* anthropic_body(const model_t* model, const context_t* ctx) {
   if (model->max_tokens >= 0) {
     jobject_put(jbody, "max_tokens", jnumber_new(model->max_tokens));
   }
+  if (model->stream) {
+    jobject_put(jbody, "stream", jbool_new(true));
+  }
   return jbody;
 }
 
@@ -671,6 +818,63 @@ static mdlres_t* anthropic_parse(char* response) {
   return res;
 }
 
+static mdlres_t* anthropic_parse_stream(char* response) {
+  jnode_t* jresp = jfrom_string(response);
+  if (!jresp) {
+    log(ERROR, "Failed to parse JSON response");
+    return NULL;
+  }
+
+  mdlres_t* res = model_response_new();
+  if (!res) {
+    jdelete(jresp);
+    return NULL;
+  }
+
+  res->raw = response;
+  res->json = jresp;
+
+  jnode_t* jtype = jobject_get(jresp, "type");
+  if (jis_empty(jtype)) return res;
+  const char* type = jstring_content(jtype);
+
+  if (strcmp(type, "message_start") == 0) {
+    jnode_t* jmessage = jobject_get(jresp, "message");
+    jnode_t* jid = jobject_get(jmessage, "id");
+    if (!jis_empty(jid)) res->id = jstring_content(jid);
+  } else if (strcmp(type, "content_block_delta") == 0) {
+    jnode_t* jdelta = jobject_get(jresp, "delta");
+    jnode_t* jdelta_type = jobject_get(jdelta, "type");
+    if (jis_empty(jdelta_type)) return res;
+    const char* delta_type = jstring_content(jdelta_type);
+    if (strcmp(delta_type, "text_delta") == 0) {
+      jnode_t* jtext = jobject_get(jdelta, "text");
+      if (!jis_empty(jtext)) res->content = jstring_content(jtext);
+    } else if (strcmp(delta_type, "thinking_delta") == 0) {
+      jnode_t* jthinking = jobject_get(jdelta, "thinking");
+      if (!jis_empty(jthinking)) res->reasoning = jstring_content(jthinking);
+    }
+    // input_json_delta carries tool_use fragments; it is consumed by
+    // anthropic_context_update_stream directly from res->json.
+  } else if (strcmp(type, "message_delta") == 0) {
+    jnode_t* jdelta = jobject_get(jresp, "delta");
+    jnode_t* jstop_reason = jobject_get(jdelta, "stop_reason");
+    if (!jis_empty(jstop_reason)) {
+      res->stop_reason = jstring_content(jstop_reason);
+      res->finished = (strcmp(res->stop_reason, "end_turn") == 0);
+      res->need_tool_call = (strcmp(res->stop_reason, "tool_use") == 0);
+    }
+  } else if (strcmp(type, "error") == 0) {
+    jnode_t* jerror = jobject_get(jresp, "error");
+    jnode_t* jmessage = jobject_get(jerror, "message");
+    if (!jis_empty(jmessage)) {
+      log(ERROR, "Anthropic stream error: %s", jstring_content(jmessage));
+    }
+  }
+
+  return res;
+}
+
 static mdlres_t* call_anthropic_api(const model_t* model,
                                     const context_t* ctx) {
   snprintf(url, sizeof(url), "%s/v1/messages", model->base_url);
@@ -707,6 +911,45 @@ static mdlres_t* call_anthropic_api(const model_t* model,
   return anthropic_parse(data);
 }
 
+static void anthropic_sse_callback(const response_t* event, void* userp) {
+  struct sse_context* ctx = (struct sse_context*)userp;
+  char* resp = strndup((const char*)event->data, event->data_size);
+  mdlres_t* chunk = anthropic_parse_stream(resp);
+  if (!chunk) {
+    log(ERROR, "Failed to parse SSE chunk");
+    free(resp);
+    return;
+  }
+  ctx->callback(chunk, ctx->userp);
+  model_response_delete(chunk);
+}
+
+static bool call_anthropic_api_stream(const model_t* model,
+                                      const context_t* ctx,
+                                      void (*callback)(const mdlres_t* chunk,
+                                                       void* userp),
+                                      void* userp) {
+  snprintf(url, sizeof(url), "%s/v1/messages", model->base_url);
+  snprintf(auth_header, sizeof(auth_header), "X-Api-Key: %s", model->api_key);
+  const char* headers[] = {auth_header, "Content-Type: application/json"};
+
+  jnode_t* jbody = anthropic_body(model, ctx);
+  char* body = jto_string(jbody);
+  jdelete(jbody);
+  log(DEBUG, "Request body: %s", body);
+
+  request_t request = {
+      .url = url,
+      .n_header = sizeof(headers) / sizeof(headers[0]),
+      .headers = headers,
+      .body = body,
+  };
+  struct sse_context sse_ctx = {.callback = callback, .userp = userp};
+  bool res = http_sse(&request, anthropic_sse_callback, &sse_ctx);
+  free(body);
+  return res;
+}
+
 mdlres_t* call_api(const model_t* model, const context_t* ctx) {
   log(INFO, "Calling API for model %s with protocol %s", model->name,
       protocol_names[model->protocol]);
@@ -725,8 +968,7 @@ bool call_api_stream(const model_t* model, const context_t* ctx,
   switch (model->protocol) {
     case OPENAI: return call_openai_api_stream(model, ctx, callback, userp);
     case ANTHROPIC:
-      log(ERROR, "Streaming not supported for Anthropics protocol");
-      return false;
+      return call_anthropic_api_stream(model, ctx, callback, userp);
   }
   return false;
 }

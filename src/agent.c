@@ -91,8 +91,10 @@ static void sse_callback(const mdlres_t* chunk, void* userp) {
 
   context_update_stream(&agent->ctx, chunk);
 
-  *ctx->running = !chunk->finished;
-  if (chunk->finished) printf("\n");
+  if (chunk->finished) {
+    *ctx->running = false;
+    printf("\n");
+  }
   if (chunk->reasoning) {
     if (ctx->line_type != REASONING) {
       if (ctx->line_type != START) printf("\n");
@@ -129,9 +131,7 @@ static void sse_callback(const mdlres_t* chunk, void* userp) {
         context_add_tool_message(&agent->ctx, id, name,
                                  "{\"error\": \"Tool not found\"}");
       } else {
-        if (ctx->line_type != START && ctx->line_type != TOOL_CALL) {
-          printf("\n");
-        }
+        if (ctx->line_type != START) printf("\n");
         printf("\033[2m[Tool Call] %s\033[0m", name);
         ctx->line_type = TOOL_CALL;
         char* result = tool->func(args);
