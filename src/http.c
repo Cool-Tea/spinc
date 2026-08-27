@@ -176,6 +176,13 @@ bool http_sse(const request_t* request,
     log(ERROR, "curl error: %s", curl_easy_strerror(res));
     return false;
   }
+  long status;
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+  if (status != 200) {
+    log(ERROR, "HTTP request failed with status %ld", status);
+    curl_easy_cleanup(curl);
+    return false;
+  }
 
   curl_easy_cleanup(curl);
   return true;

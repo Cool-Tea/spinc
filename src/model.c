@@ -226,8 +226,7 @@ static void anthropic_context_update_stream(context_t* ctx,
     jnode_t* jinput = jobject_get(jblock, "input");
     if (jis_string(jinput)) {
       jnode_t* jparsed = jfrom_string(jstring_content(jinput));
-      jobject_put(jblock, "input",
-                  jparsed ? jparsed : jobject_new());
+      jobject_put(jblock, "input", jparsed ? jparsed : jobject_new());
     }
     return;
   }
@@ -343,16 +342,35 @@ void context_add_user_message(context_t* ctx, const char* message) {
   }
 }
 
+static void openai_context_add_tool_message(context_t* ctx, const char* id,
+                                            const char* result) {
+  jarray_add(ctx->messages, openai_tool_message(id, result));
+}
+
+static void anthropic_context_add_tool_message(context_t* ctx, const char* id,
+                                               const char* result) {
+  jnode_t* jlast_msg =
+      jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
+  jnode_t* jrole = jobject_get(jlast_msg, "role");
+  const char* role = jstring_content(jrole);
+  if (strcmp(role, "user")) {
+    jarray_add(ctx->messages, anthropic_tool_message(id, result));
+  } else {
+    jnode_t* jcontent = jobject_get(jlast_msg, "content");
+    jnode_t* jtool_result = jobject_new();
+    jarray_add(jcontent, jtool_result);
+    jobject_put(jtool_result, "type", jstring_new(0, "tool_result"));
+    jobject_put(jtool_result, "tool_use_id", jstring_new(0, id));
+    jobject_put(jtool_result, "content", jstring_new(0, result));
+  }
+}
+
 void context_add_tool_message(context_t* ctx, const char* id,
                               const char* tool_name, const char* result) {
   (void)tool_name;
   switch (ctx->protocol) {
-    case OPENAI:
-      jarray_add(ctx->messages, openai_tool_message(id, result));
-      break;
-    case ANTHROPIC:
-      jarray_add(ctx->messages, anthropic_tool_message(id, result));
-      break;
+    case OPENAI: openai_context_add_tool_message(ctx, id, result); break;
+    case ANTHROPIC: anthropic_context_add_tool_message(ctx, id, result); break;
   }
 }
 
@@ -390,8 +408,7 @@ static size_t anthropic_context_get_last_message_tool_calls(
   for (size_t i = 0; i < n_content; ++i) {
     jnode_t* jitem = jarray_get(jcontent, i);
     jnode_t* jtype = jobject_get(jitem, "type");
-    if (!jis_empty(jtype) &&
-        strcmp(jstring_content(jtype), "tool_use") == 0) {
+    if (!jis_empty(jtype) && strcmp(jstring_content(jtype), "tool_use") == 0) {
       n_tool_calls++;
     }
   }
@@ -410,9 +427,9 @@ static size_t anthropic_context_get_last_message_tool_calls(
     jnode_t* jinput = jobject_get(jitem, "input");
     (*calls)[tool_index].id = jstring_content(jid);
     (*calls)[tool_index].name = jstring_content(jname);
-    (*calls)[tool_index].args =
-        jis_string(jinput) ? strdup(jstring_content(jinput))
-                           : jto_string(jinput);
+    (*calls)[tool_index].args = jis_string(jinput)
+                                    ? strdup(jstring_content(jinput))
+                                    : jto_string(jinput);
     ++tool_index;
   }
   return n_tool_calls;
@@ -924,11 +941,9 @@ static void anthropic_sse_callback(const response_t* event, void* userp) {
   model_response_delete(chunk);
 }
 
-static bool call_anthropic_api_stream(const model_t* model,
-                                      const context_t* ctx,
-                                      void (*callback)(const mdlres_t* chunk,
-                                                       void* userp),
-                                      void* userp) {
+static bool call_anthropic_api_stream(
+    const model_t* model, const context_t* ctx,
+    void (*callback)(const mdlres_t* chunk, void* userp), void* userp) {
   snprintf(url, sizeof(url), "%s/v1/messages", model->base_url);
   snprintf(auth_header, sizeof(auth_header), "X-Api-Key: %s", model->api_key);
   const char* headers[] = {auth_header, "Content-Type: application/json"};
