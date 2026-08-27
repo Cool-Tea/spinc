@@ -7,10 +7,11 @@
 
 #include "tool.h"
 
-typedef enum protocol { OPENAI, ANTHROPIC } protocol_t;
+typedef enum protocol : unsigned char { OPENAI, ANTHROPIC } protocol_t;
 
 typedef struct model {
   protocol_t protocol;
+  bool stream;
   float top_p;
   const char* name;
   const char* base_url;
@@ -28,31 +29,40 @@ typedef struct context {
   const tool_t* tools;
 } context_t;
 
+typedef struct tool_call {
+  const char* id;
+  const char* name;
+  char* args;
+} tool_call_t;
+
 typedef struct model_response {
   bool finished;
+  bool need_tool_call;
   char* raw;
   jnode_t* json;
+  const char* id;
   const char* content;
   const char* stop_reason;
   const char* reasoning;
   size_t n_tool_call;
-  struct tool_call {
-    const char* id;
-    const char* name;
-    char* args;
-  }* tool_calls;
-} mdres_t;
+  tool_call_t* tool_calls;
+} mdlres_t;
 
 bool context_init(context_t* ctx, protocol_t protocol,
                   const char* system_prompt, const tool_t* tools,
                   size_t n_tools);
 void context_clear(context_t* ctx);
-void context_update(context_t* ctx, const mdres_t* res);
+void context_update(context_t* ctx, const mdlres_t* res);
+void context_update_stream(context_t* ctx, const mdlres_t* res);
 void context_add_user_message(context_t* ctx, const char* message);
 void context_add_tool_message(context_t* ctx, const char* id,
                               const char* tool_name, const char* result);
+size_t context_get_last_message_tool_calls(context_t* ctx, tool_call_t** calls);
 
-mdres_t* call_api(const model_t* model, const context_t* ctx);
-void model_response_delete(mdres_t* res);
+mdlres_t* call_api(const model_t* model, const context_t* ctx);
+bool call_api_stream(const model_t* model, const context_t* ctx,
+                     void (*callback)(const mdlres_t* chunk, void* userp),
+                     void* userp);
+void model_response_delete(mdlres_t* res);
 
 #endif  // MODEL_H

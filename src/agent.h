@@ -16,5 +16,6 @@ agent_t* agent_new(const model_t* model, const char* system_prompt,
                    const tool_t* tools, size_t n_tools);
 void agent_delete(agent_t* agent);
 bool agent_run(agent_t* agent, const char* user_input);
+bool agent_run_stream(agent_t* agent, const char* user_input);
 
 #endif  // AGENT_H

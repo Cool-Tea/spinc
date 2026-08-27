@@ -11,6 +11,7 @@ static const model_t model = {
     .reasoning_effort = "high",
     .top_p = 0.1f,
     .max_tokens = -1,
+    .stream = false,
 };
 
 /***********************

@@ -21,5 +21,8 @@ bool http_init();
 void http_quit();
 void response_delete(response_t* response);
 response_t* http_post(const request_t* request);
+bool http_sse(const request_t* request,
+              void (*callback)(const response_t* event, void* userp),
+              void* userp);
 
 #endif  // HTTP_H

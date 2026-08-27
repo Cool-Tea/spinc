@@ -53,6 +53,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  bool stream = model.stream;
   agent_t* agent = agent_new(&model, system_prompt, tools, n_tool);
   if (!agent) {
     log(ERROR, "Failed to create agent");
@@ -60,15 +61,18 @@ int main(int argc, char* argv[]) {
   }
 
   bool success = true;
+  bool (*run)(agent_t*, const char*) = stream ? agent_run_stream : agent_run;
   if (cmdopts.prompt) {
-    success = agent_run(agent, cmdopts.prompt);
+    success = run(agent, cmdopts.prompt);
   } else {
     while (1) {
       char* line = readline("\033[1;36muser\033[1;32m>\033[0m ");
       if (!line) continue;
-      if (strncmp(line, "/exit", 5) == 0 || strncmp(line, "/quit", 5) == 0)
+      if (strncmp(line, "/exit", 5) == 0 || strncmp(line, "/quit", 5) == 0) {
+        if (line) free(line);
         break;
-      success = agent_run(agent, line);
+      }
+      success = run(agent, line);
       if (line) free(line);
     }
   }

@@ -18,6 +18,11 @@ static const char* protocol_names[] = {
 static char url[URL_LEN];
 static char auth_header[AUTH_HEADER_LEN];
 
+struct sse_context {
+  void (*callback)(const mdlres_t* chunk, void* userp);
+  void* userp;
+};
+
 static jnode_t* openai_system_message(const char* content) {
   jnode_t* jmessage = jobject_new();
   jobject_put(jmessage, "role", jstring_new(0, "system"));
@@ -98,7 +103,7 @@ void context_clear(context_t* ctx) {
   if (ctx->messages) jdelete(ctx->messages);
 }
 
-static void openai_context_update(context_t* ctx, const mdres_t* res) {
+static void openai_context_update(context_t* ctx, const mdlres_t* res) {
   jnode_t* json = res->json;
   jnode_t* jchoices = jobject_get(json, "choices");
   jnode_t* jfirst = jarray_get(jchoices, 0);
@@ -106,7 +111,7 @@ static void openai_context_update(context_t* ctx, const mdres_t* res) {
   jarray_add(ctx->messages, jcopy(jmessage));
 }
 
-static void anthropic_context_update(context_t* ctx, const mdres_t* res) {
+static void anthropic_context_update(context_t* ctx, const mdlres_t* res) {
   jnode_t* json = res->json;
   jnode_t* jcontent = jobject_get(json, "content");
   jnode_t* jmessage = jobject_new();
@@ -115,10 +120,113 @@ static void anthropic_context_update(context_t* ctx, const mdres_t* res) {
   jarray_add(ctx->messages, jmessage);
 }
 
-void context_update(context_t* ctx, const mdres_t* res) {
+void context_update(context_t* ctx, const mdlres_t* res) {
   switch (ctx->protocol) {
     case OPENAI: openai_context_update(ctx, res); break;
     case ANTHROPIC: anthropic_context_update(ctx, res); break;
+  }
+}
+
+static void openai_context_update_stream(context_t* ctx, const mdlres_t* res) {
+  jnode_t* json = res->json;
+  jnode_t* jchoices = jobject_get(json, "choices");
+  jnode_t* jfirst = jarray_get(jchoices, 0);
+  jnode_t* jdelta = jobject_get(jfirst, "delta");
+  if (jis_empty(jdelta)) return;
+
+  jnode_t* jlast_msg =
+      jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
+
+  jnode_t* jdelta_role = jobject_get(jdelta, "role");
+  if (!jis_empty(jdelta_role)) {
+    jnode_t* jlast_role = jobject_get(jlast_msg, "role");
+    const char* role = jstring_content(jdelta_role);
+    const char* last_role = jstring_content(jlast_role);
+    if (strcmp(last_role, role)) {
+      jnode_t* jmessage = jobject_new();
+      jarray_add(ctx->messages, jmessage);
+      jobject_put(jmessage, "role", jstring_new(0, role));
+      jlast_msg = jmessage;
+    }
+  }
+
+  jnode_t* jdelta_content = jobject_get(jdelta, "content");
+  if (!jis_empty(jdelta_content)) {
+    jnode_t* jlast_content = jobject_get(jlast_msg, "content");
+    if (jis_empty(jlast_content)) {
+      jobject_put(jlast_msg, "content", jcopy(jdelta_content));
+    } else {
+      jstring_concat(jlast_content, jstring_content(jdelta_content));
+    }
+  }
+
+  jnode_t* jdelta_reasoning = jobject_get(jdelta, "reasoning_content");
+  if (!jis_empty(jdelta_reasoning)) {
+    jnode_t* jlast_reasoning = jobject_get(jlast_msg, "reasoning_content");
+    if (jis_empty(jlast_reasoning)) {
+      jobject_put(jlast_msg, "reasoning_content", jcopy(jdelta_reasoning));
+    } else {
+      jstring_concat(jlast_reasoning, jstring_content(jdelta_reasoning));
+    }
+  }
+
+  jnode_t* jdelta_tool_calls = jobject_get(jdelta, "tool_calls");
+  if (!jis_empty(jdelta_tool_calls)) {
+    jnode_t* jlast_tool_calls = jobject_get(jlast_msg, "tool_calls");
+    if (jis_empty(jlast_tool_calls)) {
+      jlast_tool_calls = jarray_new();
+      jobject_put(jlast_msg, "tool_calls", jlast_tool_calls);
+      jlast_tool_calls = jlast_tool_calls;
+    }
+    size_t n_delta_tool_calls = jarray_size(jdelta_tool_calls);
+    for (size_t i = 0; i < n_delta_tool_calls; ++i) {
+      jnode_t* jdelta_call = jarray_get(jdelta_tool_calls, i);
+      jnode_t* jindex = jobject_get(jdelta_call, "index");
+      int index = jas_number(jindex)->value;
+      if (index >= jarray_size(jlast_tool_calls)) {
+        jarray_add(jlast_tool_calls, jcopy(jdelta_call));
+      } else {
+        jnode_t* jlast_call = jarray_get(jlast_tool_calls, index);
+
+        jnode_t* jdelta_func = jobject_get(jdelta_call, "function");
+        if (jis_empty(jdelta_func)) continue;
+
+        jnode_t* jlast_func = jobject_get(jlast_call, "function");
+        if (jis_empty(jlast_func)) {
+          jobject_put(jlast_call, "function", jcopy(jdelta_func));
+          continue;
+        }
+
+        jnode_t* jdelta_name = jobject_get(jdelta_func, "name");
+        if (!jis_empty(jdelta_name)) {
+          jnode_t* jlast_name = jobject_get(jlast_func, "name");
+          if (jis_empty(jlast_name)) {
+            jobject_put(jlast_func, "name", jcopy(jdelta_name));
+          } else {
+            jstring_concat(jlast_name, jstring_content(jdelta_name));
+          }
+        }
+
+        jnode_t* jdelta_args = jobject_get(jdelta_func, "arguments");
+        if (!jis_empty(jdelta_args)) {
+          jnode_t* jlast_args = jobject_get(jlast_func, "arguments");
+          if (jis_empty(jlast_args)) {
+            jobject_put(jlast_func, "arguments", jcopy(jdelta_args));
+          } else {
+            jstring_concat(jlast_args, jstring_content(jdelta_args));
+          }
+        }
+      }
+    }
+  }
+}
+
+void context_update_stream(context_t* ctx, const mdlres_t* res) {
+  switch (ctx->protocol) {
+    case OPENAI: openai_context_update_stream(ctx, res); break;
+    case ANTHROPIC:
+      log(ERROR, "Stream updates not supported for Anthropic");
+      break;
   }
 }
 
@@ -144,10 +252,42 @@ void context_add_tool_message(context_t* ctx, const char* id,
   }
 }
 
-static mdres_t* model_response_new() {
-  mdres_t* res = malloc(sizeof(mdres_t));
+size_t openai_context_get_last_message_tool_calls(context_t* ctx,
+                                                  tool_call_t** calls) {
+  jnode_t* jlast_msg =
+      jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
+  jnode_t* jtool_calls = jobject_get(jlast_msg, "tool_calls");
+  if (jis_empty(jtool_calls)) return 0;
+  size_t n_tool_calls = jarray_size(jtool_calls);
+  *calls = malloc(n_tool_calls * sizeof(tool_call_t));
+  if (!*calls) return 0;
+  for (size_t i = 0; i < n_tool_calls; ++i) {
+    jnode_t* jcall = jarray_get(jtool_calls, i);
+    jnode_t* jid = jobject_get(jcall, "id");
+    jnode_t* jfunc = jobject_get(jcall, "function");
+    jnode_t* jname = jobject_get(jfunc, "name");
+    jnode_t* jargs = jobject_get(jfunc, "arguments");
+    (*calls)[i].id = jstring_content(jid);
+    (*calls)[i].name = jstring_content(jname);
+    (*calls)[i].args = strdup(jstring_content(jargs));
+  }
+  return n_tool_calls;
+}
+
+size_t context_get_last_message_tool_calls(context_t* ctx,
+                                           tool_call_t** calls) {
+  switch (ctx->protocol) {
+    case OPENAI: return openai_context_get_last_message_tool_calls(ctx, calls);
+    case ANTHROPIC:
+      log(ERROR, "Tool calls not supported for Anthropic");
+      return 0;
+  }
+}
+
+static mdlres_t* model_response_new() {
+  mdlres_t* res = malloc(sizeof(mdlres_t));
   if (!res) return NULL;
-  memset(res, 0, sizeof(mdres_t));
+  memset(res, 0, sizeof(mdlres_t));
   return res;
 }
 
@@ -209,17 +349,20 @@ static jnode_t* openai_body(const model_t* model, const context_t* ctx) {
   if (model->max_tokens >= 0) {
     jobject_put(jbody, "max_tokens", jnumber_new(model->max_tokens));
   }
+  if (model->stream) {
+    jobject_put(jbody, "stream", jbool_new(true));
+  }
   return jbody;
 }
 
-static mdres_t* openai_parse(char* response) {
+static mdlres_t* openai_parse(char* response) {
   jnode_t* jresp = jfrom_string(response);
   if (!jresp) {
     log(ERROR, "Failed to parse JSON response");
     return NULL;
   }
 
-  mdres_t* res = model_response_new();
+  mdlres_t* res = model_response_new();
   if (!res) {
     jdelete(jresp);
     return NULL;
@@ -228,20 +371,23 @@ static mdres_t* openai_parse(char* response) {
   res->raw = response;
   res->json = jresp;
 
+  jnode_t* jid = jobject_get(jresp, "id");
+  res->id = jstring_content(jid);
   jnode_t* jchoices = jobject_get(jresp, "choices");
   jnode_t* jfirst = jarray_get(jchoices, 0);
   jnode_t* jfinish_reason = jobject_get(jfirst, "finish_reason");
   res->stop_reason = jstring_content(jfinish_reason);
   res->finished = (strcmp(res->stop_reason, "stop") == 0);
+  res->need_tool_call = (strcmp(res->stop_reason, "tool_calls") == 0);
   jnode_t* jmessage = jobject_get(jfirst, "message");
   jnode_t* jreasoning = jobject_get(jmessage, "reasoning_content");
-  if (jreasoning && jstring_len(jreasoning))
+  if (!jis_empty(jreasoning) && jstring_len(jreasoning))
     res->reasoning = jstring_content(jreasoning);
   jnode_t* jcontent = jobject_get(jmessage, "content");
-  if (jcontent && jstring_len(jcontent))
+  if (!jis_empty(jcontent) && jstring_len(jcontent))
     res->content = jstring_content(jcontent);
   jnode_t* jtool_calls = jobject_get(jmessage, "tool_calls");
-  if (jtool_calls) {
+  if (!jis_empty(jtool_calls)) {
     res->n_tool_call = jarray_size(jtool_calls);
     res->tool_calls = malloc(res->n_tool_call * sizeof(struct tool_call));
     if (!res->tool_calls) {
@@ -250,11 +396,11 @@ static mdres_t* openai_parse(char* response) {
     }
     for (size_t i = 0; i < res->n_tool_call; ++i) {
       jnode_t* jcall = jarray_get(jtool_calls, i);
-      jnode_t* jid = jobject_get(jcall, "id");
+      jnode_t* jcall_id = jobject_get(jcall, "id");
       jnode_t* jfunc = jobject_get(jcall, "function");
       jnode_t* jname = jobject_get(jfunc, "name");
       jnode_t* jargs = jobject_get(jfunc, "arguments");
-      res->tool_calls[i].id = jstring_content(jid);
+      res->tool_calls[i].id = jstring_content(jcall_id);
       res->tool_calls[i].name = jstring_content(jname);
       res->tool_calls[i].args = strdup(jstring_content(jargs));
     }
@@ -263,7 +409,71 @@ static mdres_t* openai_parse(char* response) {
   return res;
 }
 
-static mdres_t* call_openai_api(const model_t* model, const context_t* ctx) {
+static mdlres_t* openai_parse_stream(char* response) {
+  jnode_t* jresp = jfrom_string(response);
+  if (!jresp) {
+    log(ERROR, "Failed to parse JSON response");
+    return NULL;
+  }
+
+  mdlres_t* res = model_response_new();
+  if (!res) {
+    jdelete(jresp);
+    return NULL;
+  }
+
+  res->raw = response;
+  res->json = jresp;
+
+  jnode_t* jid = jobject_get(jresp, "id");
+  res->id = jstring_content(jid);
+  jnode_t* jchoices = jobject_get(jresp, "choices");
+  jnode_t* jfirst = jarray_get(jchoices, 0);
+  jnode_t* jfinish_reason = jobject_get(jfirst, "finish_reason");
+  res->stop_reason =
+      jis_empty(jfinish_reason) ? NULL : jstring_content(jfinish_reason);
+  res->finished =
+      res->stop_reason ? (strcmp(res->stop_reason, "stop") == 0) : false;
+  res->need_tool_call =
+      res->stop_reason ? (strcmp(res->stop_reason, "tool_calls") == 0) : false;
+  jnode_t* jdelta = jobject_get(jfirst, "delta");
+  jnode_t* jreasoning = jobject_get(jdelta, "reasoning_content");
+  if (!jis_empty(jreasoning) && jstring_len(jreasoning))
+    res->reasoning = jstring_content(jreasoning);
+  log(DEBUG, "Parsed SSE chunk: reasoning=%s",
+      res->reasoning ? res->reasoning : "NULL");
+  jnode_t* jcontent = jobject_get(jdelta, "content");
+  if (!jis_empty(jcontent) && jstring_len(jcontent))
+    res->content = jstring_content(jcontent);
+  jnode_t* jtool_calls = jobject_get(jdelta, "tool_calls");
+  if (!jis_empty(jtool_calls)) {
+    res->n_tool_call = jarray_size(jtool_calls);
+    res->tool_calls = malloc(res->n_tool_call * sizeof(struct tool_call));
+    if (!res->tool_calls) {
+      model_response_delete(res);
+      return NULL;
+    }
+    for (size_t i = 0; i < res->n_tool_call; ++i) {
+      jnode_t* jcall = jarray_get(jtool_calls, i);
+      jnode_t* jcall_id = jobject_get(jcall, "id");
+      res->tool_calls[i].id =
+          jis_empty(jcall_id) ? NULL : jstring_content(jcall_id);
+      jnode_t* jfunc = jobject_get(jcall, "function");
+      if (!jis_empty(jfunc)) {
+        jnode_t* jname = jobject_get(jfunc, "name");
+        res->tool_calls[i].name =
+            jis_empty(jname) ? NULL : jstring_content(jname);
+        jnode_t* jargs = jobject_get(jfunc, "arguments");
+        res->tool_calls[i].args =
+            jis_empty(jargs) ? NULL : strdup(jstring_content(jargs));
+      }
+    }
+  }
+
+  return res;
+}
+
+static mdlres_t* call_openai_api(const model_t* model, const context_t* ctx) {
   snprintf(url, sizeof(url), "%s/chat/completions", model->base_url);
   snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s",
            model->api_key);
@@ -297,6 +507,45 @@ static mdres_t* call_openai_api(const model_t* model, const context_t* ctx) {
   resp->data = NULL;  // Prevent double free
   response_delete(resp);
   return openai_parse(data);
+}
+
+static void openai_sse_callback(const response_t* event, void* userp) {
+  struct sse_context* ctx = (struct sse_context*)userp;
+  char* resp = strndup((const char*)event->data, event->data_size);
+  mdlres_t* chunk = openai_parse_stream(resp);
+  if (!chunk) {
+    log(ERROR, "Failed to parse SSE chunk");
+    free(resp);
+    return;
+  }
+  ctx->callback(chunk, ctx->userp);
+  model_response_delete(chunk);
+}
+
+static bool call_openai_api_stream(const model_t* model, const context_t* ctx,
+                                   void (*callback)(const mdlres_t* chunk,
+                                                    void* userp),
+                                   void* userp) {
+  snprintf(url, sizeof(url), "%s/chat/completions", model->base_url);
+  snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s",
+           model->api_key);
+  const char* headers[] = {auth_header, "Content-Type: application/json"};
+
+  jnode_t* jbody = openai_body(model, ctx);
+  char* body = jto_string(jbody);
+  jdelete(jbody);
+  log(DEBUG, "Request body: %s", body);
+
+  request_t request = {
+      .url = url,
+      .n_header = sizeof(headers) / sizeof(headers[0]),
+      .headers = headers,
+      .body = body,
+  };
+  struct sse_context sse_ctx = {.callback = callback, .userp = userp};
+  bool res = http_sse(&request, openai_sse_callback, &sse_ctx);
+  free(body);
+  return res;
 }
 
 static jnode_t* anthropic_serialize_tool(const tool_t* tool) {
@@ -358,14 +607,14 @@ static jnode_t* anthropic_body(const model_t* model, const context_t* ctx) {
   return jbody;
 }
 
-static mdres_t* anthropic_parse(char* response) {
+static mdlres_t* anthropic_parse(char* response) {
   jnode_t* jresp = jfrom_string(response);
   if (!jresp) {
     log(ERROR, "Failed to parse JSON response");
     return NULL;
   }
 
-  mdres_t* res = model_response_new();
+  mdlres_t* res = model_response_new();
   if (!res) {
     jdelete(jresp);
     return NULL;
@@ -377,6 +626,7 @@ static mdres_t* anthropic_parse(char* response) {
   jnode_t* jstop_reason = jobject_get(jresp, "stop_reason");
   res->stop_reason = jstring_content(jstop_reason);
   res->finished = (strcmp(res->stop_reason, "end_turn") == 0);
+  res->need_tool_call = (strcmp(res->stop_reason, "tool_use") == 0);
   jnode_t* jcontent = jobject_get(jresp, "content");
   if (jis_string(jcontent)) {
     res->content = jstring_content(jcontent);
@@ -421,7 +671,8 @@ static mdres_t* anthropic_parse(char* response) {
   return res;
 }
 
-static mdres_t* call_anthropic_api(const model_t* model, const context_t* ctx) {
+static mdlres_t* call_anthropic_api(const model_t* model,
+                                    const context_t* ctx) {
   snprintf(url, sizeof(url), "%s/v1/messages", model->base_url);
   snprintf(auth_header, sizeof(auth_header), "X-Api-Key: %s", model->api_key);
   const char* headers[] = {auth_header, "Content-Type: application/json"};
@@ -456,7 +707,7 @@ static mdres_t* call_anthropic_api(const model_t* model, const context_t* ctx) {
   return anthropic_parse(data);
 }
 
-mdres_t* call_api(const model_t* model, const context_t* ctx) {
+mdlres_t* call_api(const model_t* model, const context_t* ctx) {
   log(INFO, "Calling API for model %s with protocol %s", model->name,
       protocol_names[model->protocol]);
   switch (model->protocol) {
@@ -466,7 +717,21 @@ mdres_t* call_api(const model_t* model, const context_t* ctx) {
   return NULL;
 }
 
-void model_response_delete(mdres_t* res) {
+bool call_api_stream(const model_t* model, const context_t* ctx,
+                     void (*callback)(const mdlres_t* chunk, void* userp),
+                     void* userp) {
+  log(INFO, "Calling API (streaming) for model %s with protocol %s",
+      model->name, protocol_names[model->protocol]);
+  switch (model->protocol) {
+    case OPENAI: return call_openai_api_stream(model, ctx, callback, userp);
+    case ANTHROPIC:
+      log(ERROR, "Streaming not supported for Anthropics protocol");
+      return false;
+  }
+  return false;
+}
+
+void model_response_delete(mdlres_t* res) {
   if (!res) return;
   if (res->raw) free(res->raw);
   if (res->json) jdelete(res->json);
