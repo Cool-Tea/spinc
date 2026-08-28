@@ -4,7 +4,7 @@ A minimal AI agent written in C. `spinc` connects to any OpenAI-compatible Chat 
 
 ## Design Philosophy
 
-Inspired by [suckless](https://suckless.org), the agent is designed to be simple to modify. **If you want new feature, write yourself and enjoy your labor!**
+Inspired by [suckless](https://suckless.org/philosophy), the agent is designed to be simple to modify. **If you want new feature, write yourself and enjoy your labor!**
 
 ## Features
 

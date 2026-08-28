@@ -84,3 +84,17 @@ static const char* system_prompt =
 
 static enum log_level log_level = DEBUG;
 static const char* log_dir = ".spinc/logs";
+
+/***********
+ * Command *
+ ***********/
+
+extern bool help_command(const char* line);
+extern bool exit_command(const char* line);
+
+static const command_t commands[] = {
+    DEFINE_COMMAND("help", "Show this help message.", help_command),
+    DEFINE_COMMAND("exit", "Exit the program.", exit_command),
+    DEFINE_COMMAND("quit", "Exit the program.", exit_command),
+};
+static const size_t n_command = sizeof(commands) / sizeof(command_t);
