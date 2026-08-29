@@ -1,3 +1,8 @@
+#ifdef TYPING
+#include "log.h"
+#include "provider/provider.h"
+#endif
+
 /***********************
  * Model configuration *
  ***********************/
