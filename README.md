@@ -10,8 +10,9 @@ Inspired by [suckless](https://suckless.org/philosophy), the agent is designed t
 
 - **Pure C agent loop** — sends messages to the API, executes any requested tool calls, feeds the results back, and repeats until the model answers.
 - **Built-in tools** — `Read`, `Write`, `Edit`, and `Bash` let the model read files, write files, and run shell commands. **In fact, the README is written by this agent!**
-- **Multi-protocol** — speaks both the OpenAI (`/chat/completions`) and Anthropic (`/v1/messages`) protocols behind a single abstraction, so it works with any OpenAI-compatible provider (e.g. DeepSeek) as well as Anthropic.
+- **Multi-protocol** — speaks the OpenAI Chat Completion and Anthropic Message protocols behind a single provider abstraction. Three providers are bundled: `OPENAI_COMPATIBLE`, `ANTHROPIC_COMPATIBLE`, and `DEEPSEEK`.
 - **Streaming** — token-by-token streaming via Server-Sent Events for both protocols, so reasoning and answers appear as they are generated instead of waiting for the full response.
+- **Command system** — slash commands in the interactive REPL with readline tab completion.
 - **Bundled JSON library** — ships with [sjson](https://github.com/Cool-Tea/sjson), a compact JSON parser/serializer.
 - **Colored logging** — per-file/function/line debug output, configurable at compile time.
 
@@ -25,14 +26,16 @@ spinc/
 └── src/
     ├── main.c          # CLI entry point
     ├── agent.c/h       # Agent loop & tool-call execution
-    ├── model.c/h       # Protocol abstraction & API request building (OpenAI/Anthropic)
+    ├── error.c/h       # Error codes & helpers
     ├── http.c/h        # libcurl HTTP POST wrapper
-    ├── tools.c         # Tool implementations (Read/Write/Edit/Bash)
-    ├── tool.h          # Tool/parameter definition macros & structs
+    ├── model.h         # Model configuration struct
     ├── config.def.h    # Config template (copy to config.h)
     ├── config.h        # Your local config (gitignored)
     ├── log.c/h         # Logging (macros, init, log levels)
-    └── sjson.c/h       # Bundled JSON library
+    ├── sjson.c/h       # Bundled JSON library
+    ├── command/        # Slash commands (help/exit/quit)
+    ├── provider/       # Provider abstraction & protocol implementations
+    └── tool/           # Tools framework
 ```
 
 ## Requirements
@@ -67,11 +70,11 @@ Then edit `src/config.h`:
 ### Model
 
 ```c
+static const protyp_t provider_type = DEEPSEEK;
 static const model_t model = {
-    .protocol         = OPENAI,
     .name             = "deepseek-v4-flash",
     .base_url         = "https://api.deepseek.com",
-    .api_key          = "your-api-key-here",   // <- set your key
+    .api_key          = NULL,                    // <- set your key
     .thinking         = "enabled",
     .reasoning_effort = "high",
     .top_p            = 0.1f,
@@ -80,7 +83,7 @@ static const model_t model = {
 };
 ```
 
-- `protocol` — the API protocol used (`OPENAI` or `ANTHROPIC`).
+- `provider_type` — the provider implementation to use: `OPENAI_COMPATIBLE`, `ANTHROPIC_COMPATIBLE`, or `DEEPSEEK` (see `src/provider/provider.h`).
 - `name` — the model identifier sent in the request body.
 - `base_url` — the API base URL.
 - `api_key` — the secret used for authentication.
@@ -88,11 +91,11 @@ static const model_t model = {
 - `reasoning_effort` — the reasoning effort level.
 - `top_p` — nucleus sampling parameter sent with the request.
 - `max_tokens` — the maximum number of tokens to generate; `-1` to let the API use its default.
-- `stream` — set to `true` to enable streaming mode: the model's reasoning and answer are printed incrementally as they are generated instead of after the full response arrives. Works for both `OPENAI` and `ANTHROPIC` protocols.
+- `stream` — set to `true` to enable streaming mode: the model's reasoning and answer are printed incrementally as they are generated instead of after the full response arrives. Works for all three providers (`OPENAI_COMPATIBLE`, `ANTHROPIC_COMPATIBLE`, and `DEEPSEEK`).
 
 ### Tools
 
-Tools are declared with the `DEFINE_TOOL` / `DEFINE_PARAM` macros and implemented in `src/tools.c`. By default the following tools are registered:
+Tools are declared with the `DECLARE_TOOL` / `DEFINE_TOOL` / `DEFINE_PARAM` macros and implemented in `src/tool/` (one file per tool). The registry in `src/tool/registry.h` registers the tools, and the ones to enable are listed in `src/config.h`. By default the following tools are registered:
 
 | Tool    | Description                                                             | Parameters                                                                                                |
 | ------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
@@ -103,7 +106,7 @@ Tools are declared with the `DEFINE_TOOL` / `DEFINE_PARAM` macros and implemente
 
 #### Adding a tool
 
-Implement a `char* foo_tool(const char* params)` function in `src/tools.c`, declare it in `config.h` (e.g. `extern char* foo_tool(const char* params);`), and register it in the `tools[]` array with `DEFINE_TOOL`. Tool functions receive a JSON string of the arguments and return a JSON string of the result.
+Implement a `err_t foo_tool(const char* args, size_t args_len, char** result, size_t* result_len)` function in its own file under `src/tool/`, declare it with `DECLARE_TOOL` in `src/tool/registry.h`, and enable it in `src/config.h`. Tool functions receive a JSON string of the arguments and, on success, return `ERROR_NONE` and produce a JSON result string; system-level failures are reported through the `err_t` return value.
 
 ### System prompt
 
@@ -133,12 +136,16 @@ Run `spinc` with the optional `-p` flag to pass a single prompt and exit:
 ./spinc -p "Write a sentence introducing yourself to the file ./doc.txt"
 ```
 
-Without `-p`, `spinc` starts an interactive REPL. Type prompts at the `user>` prompt, and quit with `/exit` or `/quit`:
+Without `-p`, `spinc` starts an interactive REPL. Type prompts at the `user>` prompt, and use slash commands — `/help` lists them, `/exit` or `/quit` leave the program:
 
 ```sh
 $ ./spinc # or make run
 user> What files are in this directory?
 ...
+user> /help
+   exit  Exit the program.
+   help  Show this help message.
+   quit  Exit the program.
 user> /exit
 ```
 

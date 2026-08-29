@@ -2,7 +2,8 @@
 #define COMMAND_H
 
 #include <stddef.h>
-#include <stdbool.h>
+
+#include "error.h"
 
 #define DEFINE_COMMAND(name, description, func) \
   (command_t) { name, description, func }
@@ -10,12 +11,10 @@
 typedef struct command {
   const char* name;
   const char* description;
-  bool (*func)(const char* line);
+  err_t (*func)(const char* line);
 } command_t;
 
-bool command_init(const command_t* cmds, size_t n_cmds);
-void command_quit();
 size_t command_get_all(const command_t** cmds);
-const command_t* command_find(const char* name);
+err_t command_find(const char* name, size_t name_len, const command_t** cmd);
 
 #endif

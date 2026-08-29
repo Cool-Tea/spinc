@@ -8,9 +8,9 @@ DEBUG_OBJS = $(SRCS:.c=.o.debug)
 TARGET       = $(ROOT)/spinc
 DEBUG_TARGET = $(ROOT)/spinc_debug
 
-DEBUG_CFLAGS  := -Wall -Wextra -std=gnu23 -O0 -g -fsanitize=address -fno-omit-frame-pointer -DLOG_LEVEL=DEBUG
+DEBUG_CFLAGS  := -I$(SRC_DIR) -Wall -Wextra -std=gnu23 -O0 -g -fsanitize=address -fno-omit-frame-pointer -DLOG_LEVEL=DEBUG
 DEBUG_LDFLAGS := -lcurl -lreadline -fsanitize=address -fno-omit-frame-pointer
-CFLAGS  := -std=gnu23 -O2
+CFLAGS  := -I$(SRC_DIR) -std=gnu23 -O2
 LDFLAGS := -lcurl -lreadline
 
 all: $(TARGET) $(DEBUG_TARGET)
@@ -25,10 +25,16 @@ $(TARGET): $(OBJS)
 $(DEBUG_TARGET): $(DEBUG_OBJS)
 	$(CC) $(DEBUG_LDFLAGS) -o $@ $^
 
-$(SRC_DIR)/%.o: $(SRC_DIR)/%.c $(CONFIG)
+$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(SRC_DIR)/%.o.debug: $(SRC_DIR)/%.c $(CONFIG)
+$(SRC_DIR)/main.o: $(SRC_DIR)/main.c $(CONFIG)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SRC_DIR)/%.o.debug: $(SRC_DIR)/%.c
+	$(CC) $(DEBUG_CFLAGS) -c -o $@ $<
+
+$(SRC_DIR)/main.o.debug: $(SRC_DIR)/main.c $(CONFIG)
 	$(CC) $(DEBUG_CFLAGS) -c -o $@ $<
 
 run: $(TARGET)

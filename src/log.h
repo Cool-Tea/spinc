@@ -2,30 +2,31 @@
 #define LOG_H
 
 #include <stdio.h>
-#include <stdbool.h>
 #include <assert.h>
+
+#include "error.h"
 
 #define log_assert(cond) assert(cond)
 
 #ifdef LOG_LEVEL
-#define log(level, fmt, ...)                                             \
-  do {                                                                   \
-    if (level >= LOG_LEVEL) {                                            \
-      log_assert(level > ALL && level < DISABLE && "Invalid log level"); \
-      fprintf(glog_file, level##_PREFIX " [%s:%s:%d] " fmt "\033[0m\n",  \
-              __FILE__, __func__, __LINE__, ##__VA_ARGS__);              \
-      fflush(glog_file);                                                 \
-    }                                                                    \
+#define log(level, fmt, ...)                                                 \
+  do {                                                                       \
+    if (level >= LOG_LEVEL) {                                                \
+      log_assert(level > ALL && level < DISABLE && "Invalid log level");     \
+      fprintf(log_get_file(), level##_PREFIX " [%s:%s:%d] " fmt "\033[0m\n", \
+              __FILE__, __func__, __LINE__, ##__VA_ARGS__);                  \
+      fflush(log_get_file());                                                \
+    }                                                                        \
   } while (0)
 #else
-#define log(level, fmt, ...)                                             \
-  do {                                                                   \
-    if (level >= glog_level) {                                           \
-      log_assert(level > ALL && level < DISABLE && "Invalid log level"); \
-      fprintf(glog_file, level##_PREFIX " [%s:%s:%d] " fmt "\033[0m\n",  \
-              __FILE__, __func__, __LINE__, ##__VA_ARGS__);              \
-      fflush(glog_file);                                                 \
-    }                                                                    \
+#define log(level, fmt, ...)                                                 \
+  do {                                                                       \
+    if (level >= log_get_level()) {                                          \
+      log_assert(level > ALL && level < DISABLE && "Invalid log level");     \
+      fprintf(log_get_file(), level##_PREFIX " [%s:%s:%d] " fmt "\033[0m\n", \
+              __FILE__, __func__, __LINE__, ##__VA_ARGS__);                  \
+      fflush(log_get_file());                                                \
+    }                                                                        \
   } while (0)
 #endif
 
@@ -46,10 +47,9 @@ enum log_level {
   DISABLE,
 };
 
-bool log_init(const char* log_dir, enum log_level level);
+err_t log_init(const char* log_dir, enum log_level level);
 void log_quit();
-
-extern FILE* glog_file;
-extern enum log_level glog_level;
+enum log_level log_get_level();
+FILE* log_get_file();
 
 #endif  // LOG_H

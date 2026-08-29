@@ -1,14 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <unistd.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 
 #include "log.h"
-#include "http.h"
+#include "error.h"
 #include "agent.h"
-#include "command.h"
+#include "command/command.h"
 
 #include "config.h"
 
@@ -18,9 +17,10 @@ typedef struct cmdopts {
 
 static cmdopts_t cmdopts = {0};
 static agent_t* agent = NULL;
+static toolset_t* enabled_toolset = NULL;
 static char* line = NULL;
 
-static bool parse_options(int argc, char* argv[]) {
+static void parse_options(int argc, char* argv[]) {
   int opt;
   while ((opt = getopt(argc, argv, "p:")) != -1) {
     switch (opt) {
@@ -28,16 +28,81 @@ static bool parse_options(int argc, char* argv[]) {
       default: break;
     }
   }
-  return true;
 }
 
-static bool agent_init() {
-  log(INFO, "Initializing agent with model: %s", model.name);
-  agent = agent_new(&model, system_prompt, tools, n_tool);
-  if (!agent) {
-    return false;
+static char* command_generator(const char* text, int state) {
+  static size_t index;
+  static size_t len;
+  if (!state) {
+    index = 0;
+    len = strlen(text) - 1; /* text includes the leading '/' */
   }
-  return true;
+  const command_t* cmds = NULL;
+  size_t n_cmd = command_get_all(&cmds);
+  while (index < n_cmd) {
+    const command_t* cmd = &cmds[index++];
+    if (len == 0 || strncmp(cmd->name, text + 1, len) == 0) {
+      char* match = malloc(strlen(cmd->name) + 2);
+      match[0] = '/';
+      strcpy(match + 1, cmd->name);
+      return match;
+    }
+  }
+  return NULL;
+}
+
+static char** command_completion(const char* text, int start, int end) {
+  (void)start;
+  (void)end;
+  char** matches = NULL;
+  /* text points to the word being completed (== &rl_line_buffer[start]) */
+  if (text[0] == '/') {
+    rl_attempted_completion_over = 1;
+    matches = rl_completion_matches(text, command_generator);
+  }
+  return matches;
+}
+
+static err_t readline_init() {
+  rl_attempted_completion_function = command_completion;
+  return ERROR_NONE;
+}
+
+static err_t toolset_init(const char** tools, size_t n_tool) {
+  log(INFO, "Initializing toolset with %zu tools", n_tool);
+  const toolset_t* toolset = global_toolset();
+  err_t err = toolset_new(&enabled_toolset);
+  if (err != ERROR_NONE) {
+    log(ERROR, "Failed to initialize enabled toolset: %s", error_str(err));
+    return err;
+  }
+  for (size_t i = 0; i < n_tool; ++i) {
+    const tool_t* tool = NULL;
+    err_t err = toolset_find(toolset, tools[i], strlen(tools[i]), &tool);
+    if (err != ERROR_NONE) {
+      log(WARN, "Skip not found tool '%s'", tools[i]);
+      continue;
+    }
+    log(INFO, "Adding tool: %s", tool->def.name);
+    err = toolset_add(enabled_toolset, tool);
+    if (err != ERROR_NONE) {
+      log(ERROR, "Failed to add tool '%s': %s", tool->def.name, error_str(err));
+      return err;
+    }
+  }
+  return ERROR_NONE;
+}
+
+static err_t agent_init() {
+  log(INFO, "Initializing agent with model: %s", model.name);
+  const provider_t* provider = get_provider(provider_type);
+  err_t err =
+      agent_new(provider, &model, system_prompt, enabled_toolset, &agent);
+  if (err != ERROR_NONE) {
+    log(ERROR, "Failed to create agent: %s", provider->error_str(err));
+    return err;
+  }
+  return ERROR_NONE;
 }
 
 static void cleanup() {
@@ -45,10 +110,12 @@ static void cleanup() {
     agent_delete(agent);
     agent = NULL;
   }
-  if (line) {
-    free(line);
-    line = NULL;
+  if (enabled_toolset) {
+    toolset_delete(enabled_toolset);
+    enabled_toolset = NULL;
   }
+  free(line);
+  line = NULL;
 }
 
 static char* rl_get() {
@@ -61,9 +128,7 @@ static char* rl_get() {
 }
 
 int main(int argc, char* argv[]) {
-  if (!parse_options(argc, argv)) {
-    return 1;
-  }
+  parse_options(argc, argv);
 
   const char* base_url = model.base_url;
   const char* api_key = model.api_key;
@@ -74,50 +139,58 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  if (!log_init(log_dir, log_level)) {
-    fprintf(stderr,
-            " \033[1;31m[ERROR] error: failed to initialize logging\033[0m\n");
-    return 1;
-  }
   atexit(log_quit);
-
-  if (!http_init()) {
-    log(ERROR, "Failed to initialize HTTP client");
-    return 1;
-  }
   atexit(http_quit);
-
-  if (!command_init(commands, n_command)) {
-    log(ERROR, "Failed to initialize command system");
-    return 1;
-  }
-  atexit(command_quit);
-
-  if (!agent_init()) {
-    log(ERROR, "Failed to initialize agent");
-    return 1;
-  }
   atexit(cleanup);
 
-  bool success = true;
-  bool (*run)(agent_t*, const char*) =
+  err_t err = ERROR_NONE;
+  if ((err = log_init(log_dir, log_level)) != ERROR_NONE) {
+    fprintf(
+        stderr,
+        " \033[1;31m[ERROR] error: failed to initialize logging: %s\033[0m\n",
+        error_str(err));
+    return 1;
+  }
+
+  if ((err = http_init()) != ERROR_NONE) {
+    log(ERROR, "Failed to initialize HTTP client: %s", error_str(err));
+    return 1;
+  }
+
+  if ((err = readline_init()) != ERROR_NONE) {
+    log(ERROR, "Failed to initialize readline: %s", error_str(err));
+    return 1;
+  }
+
+  if ((err = toolset_init(tools, n_tool)) != ERROR_NONE) {
+    log(ERROR, "Failed to initialize global toolset: %s", error_str(err));
+    return 1;
+  }
+
+  if ((err = agent_init()) != ERROR_NONE) {
+    log(ERROR, "Failed to initialize agent: %s", error_str(err));
+    return 1;
+  }
+
+  err_t (*run)(agent_t*, const char*) =
       model.stream ? agent_run_stream : agent_run;
   if (cmdopts.prompt) {
-    success = run(agent, cmdopts.prompt);
+    err = run(agent, cmdopts.prompt);
   } else {
     while (1) {
       char* trimmed_line = rl_get();
       if (!trimmed_line || !*trimmed_line) continue;
       if (*trimmed_line == '/') {
-        const command_t* cmd = command_find(trimmed_line + 1);
-        if (cmd) success = cmd->func(trimmed_line);
+        const command_t* cmd = NULL;
+        err = command_find(trimmed_line + 1, strlen(trimmed_line + 1), &cmd);
+        if (err == ERROR_NONE) err = cmd->func(trimmed_line);
         else printf("\033[1;31mUnknown command: %s\033[0m\n", trimmed_line);
       } else {
-        success = run(agent, trimmed_line);
+        err = run(agent, trimmed_line);
       }
       if (line) free(line);
     }
   }
 
-  return !success;
+  return err;
 }

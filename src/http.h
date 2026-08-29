@@ -2,12 +2,14 @@
 #define HTTP_H
 
 #include <stddef.h>
-#include <stdbool.h>
+
+#include "error.h"
 
 typedef struct request {
   const char* url;
   size_t n_header;
   const char** headers;
+  size_t body_size;
   const char* body;
 } request_t;
 
@@ -17,12 +19,18 @@ typedef struct response {
   unsigned char* data;
 } response_t;
 
-bool http_init();
+typedef struct event {
+  size_t event_len;
+  const char* event;
+  size_t data_len;
+  const unsigned char* data;
+} event_t;
+
+err_t http_init();
 void http_quit();
-void response_delete(response_t* response);
-response_t* http_post(const request_t* request);
-bool http_sse(const request_t* request,
-              void (*callback)(const response_t* event, void* userp),
-              void* userp);
+err_t http_post(const request_t* request, response_t* response);
+err_t http_sse(const request_t* request,
+               err_t (*callback)(const event_t* event, void* userp),
+               void* userp);
 
 #endif  // HTTP_H

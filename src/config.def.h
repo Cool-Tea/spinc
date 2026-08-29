@@ -2,8 +2,8 @@
  * Model configuration *
  ***********************/
 
+static const protyp_t provider_type = DEEPSEEK;
 static const model_t model = {
-    .protocol = OPENAI,
     .name = "deepseek-v4-flash",
     .base_url = "https://api.deepseek.com",
     .api_key = NULL,  // Set your API key here
@@ -18,51 +18,15 @@ static const model_t model = {
  * Tools configuration *
  ***********************/
 
-// tool functions (implemented in tools.c)
-extern char* read_tool(const char* params);
-extern char* write_tool(const char* params);
-extern char* edit_tool(const char* params);
-extern char* bash_tool(const char* params);
-
-// tool definitions
-static const tool_t tools[] = {
-    DEFINE_TOOL(
-        "Read", "Read a file and return its contents with line numbers.",
-        read_tool,
-        DEFINE_PARAM(true, "path", "string", "The path to the file to read."),
-        DEFINE_PARAM(
-            false, "offset", "integer",
-            "The line number offset to start reading from. Defaults to 1."),
-        DEFINE_PARAM(false, "limit", "integer",
-                     "The number of lines to read. Defaults to reading the "
-                     "entire file.")),
-
-    DEFINE_TOOL(
-        "Write", "Write contents to a file.", write_tool,
-        DEFINE_PARAM(true, "path", "string", "The path to the file to write."),
-        DEFINE_PARAM(true, "contents", "string",
-                     "The contents to write to the file.")),
-
-    DEFINE_TOOL(
-        "Edit",
-        "Edit an existing file by replacing exact old contents with new "
-        "contents.",
-        edit_tool,
-        DEFINE_PARAM(true, "path", "string", "The path to the file to edit."),
-        DEFINE_PARAM(true, "old_string", "string",
-                     "The string to replace for in the file."),
-        DEFINE_PARAM(true, "new_string", "string",
-                     "The new string to replace with in the file."),
-        DEFINE_PARAM(false, "replace_all", "boolean",
-                     "Whether to replace all occurrences of the old string. "
-                     "Defaults to false.")),
-
-    DEFINE_TOOL("Bash", "Execute a bash command and return its output.",
-                bash_tool,
-                DEFINE_PARAM(true, "command", "string",
-                             "The bash command to execute.")),
+// Tool names to enable. Tools are implemented under src/tool/ and registered
+// in src/tool/registry.h.
+static const char* tools[] = {
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
 };
-static const size_t n_tool = sizeof(tools) / sizeof(tool_t);
+static const size_t n_tool = sizeof(tools) / sizeof(const char*);
 
 /*****************
  * System Prompt *
@@ -84,17 +48,3 @@ static const char* system_prompt =
 
 static enum log_level log_level = DEBUG;
 static const char* log_dir = ".spinc/logs";
-
-/***********
- * Command *
- ***********/
-
-extern bool help_command(const char* line);
-extern bool exit_command(const char* line);
-
-static const command_t commands[] = {
-    DEFINE_COMMAND("help", "Show this help message.", help_command),
-    DEFINE_COMMAND("exit", "Exit the program.", exit_command),
-    DEFINE_COMMAND("quit", "Exit the program.", exit_command),
-};
-static const size_t n_command = sizeof(commands) / sizeof(command_t);

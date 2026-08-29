@@ -1,8 +1,8 @@
 /*
 
 !src/
-src/*.o
-src/*.o.debug
+src/**/*.o
+src/**/*.o.debug
 src/config.h
 !Makefile
 !.gitignore

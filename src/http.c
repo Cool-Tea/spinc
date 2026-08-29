@@ -9,14 +9,18 @@ struct sse_context {
   size_t len;
   size_t cap;
   char* buffer;
-  void (*callback)(const response_t* event, void* userp);
+  err_t (*callback)(const event_t* event, void* userp);
   void* userp;
 };
 
-bool http_init() {
+err_t http_init() {
   log(INFO, "Initializing HTTP client");
   CURLcode res = curl_global_init(CURL_GLOBAL_DEFAULT);
-  return res == CURLE_OK;
+  if (res != CURLE_OK) {
+    log(ERROR, "Failed to initialize curl: %s", curl_easy_strerror(res));
+    return ERROR_CURL;
+  }
+  return ERROR_NONE;
 }
 
 void http_quit() {
@@ -42,33 +46,12 @@ static size_t http_write_callback(void* contents, size_t size, size_t nmemb,
   return real_size;
 }
 
-static response_t* response_new() {
-  response_t* resp = malloc(sizeof(response_t));
-  if (!resp) return NULL;
-  resp->status = 0;
-  resp->data_size = 0;
-  resp->data = NULL;
-  return resp;
-}
-
-void response_delete(response_t* response) {
-  if (response) {
-    if (response->data) free(response->data);
-    free(response);
-  }
-}
-
-response_t* http_post(const request_t* request) {
+err_t http_post(const request_t* request, response_t* response) {
+  if (!response) return ERROR_NULLPTR;
   log(INFO, "Sending HTTP POST request to %s", request->url);
 
   CURL* curl = curl_easy_init();
-  if (!curl) return NULL;
-
-  response_t* resp = response_new();
-  if (!resp) {
-    curl_easy_cleanup(curl);
-    return NULL;
-  }
+  if (!curl) return ERROR_CURL;
 
   struct curl_slist* headers = NULL;
   for (size_t i = 0; i < request->n_header; ++i) {
@@ -78,7 +61,7 @@ response_t* http_post(const request_t* request) {
   curl_easy_setopt(curl, CURLOPT_URL, request->url);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_write_callback);
 
   CURLcode res = curl_easy_perform(curl);
@@ -86,13 +69,12 @@ response_t* http_post(const request_t* request) {
   if (res != CURLE_OK) {
     curl_easy_cleanup(curl);
     log(ERROR, "curl error: %s", curl_easy_strerror(res));
-    response_delete(resp);
-    return NULL;
+    return ERROR_CURL;
   }
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &resp->status);
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response->status);
 
   curl_easy_cleanup(curl);
-  return resp;
+  return ERROR_NONE;
 }
 
 static size_t http_sse_callback(void* contents, size_t size, size_t nmemb,
@@ -113,20 +95,27 @@ static size_t http_sse_callback(void* contents, size_t size, size_t nmemb,
   ctx->buffer[ctx->len] = '\0';
 
   char *line = ctx->buffer, *end = ctx->buffer + ctx->len;
+  event_t event = {0};
   while (line < end) {
     char* next_line = memchr(line, '\n', end - line);
     if (!next_line) break;
-    if (strncmp(line, "data: ", 6) == 0) {
+    if (strncmp(line, "event: ", 7) == 0) {
+      line += 7;  // Skip "event: "
+      size_t event_len = next_line - line;
+      line[event_len] = '\0';
+      event.event_len = event_len;
+      event.event = line;
+    } else if (strncmp(line, "data: ", 6) == 0) {
       line += 6;  // Skip "data: "
       size_t data_len = next_line - line;
       line[data_len] = '\0';
-      if (strcmp(line, "[DONE]") == 0) {
-        line = next_line + 1;
-        break;
+      event.data_len = data_len;
+      event.data = (const unsigned char*)line;
+      err_t err = ctx->callback(&event, ctx->userp);
+      if (err != ERROR_NONE) {
+        log(ERROR, "SSE callback error: %d", err);
+        return 0;  // Stop processing on error
       }
-      response_t event = {
-          .status = 200, .data_size = data_len, .data = (void*)line};
-      ctx->callback(&event, ctx->userp);
     }
     line = next_line + 1;
   }
@@ -141,13 +130,13 @@ static size_t http_sse_callback(void* contents, size_t size, size_t nmemb,
   return real_size;
 }
 
-bool http_sse(const request_t* request,
-              void (*callback)(const response_t* event, void* userp),
-              void* userp) {
+err_t http_sse(const request_t* request,
+               err_t (*callback)(const event_t* event, void* userp),
+               void* userp) {
   log(INFO, "Sending HTTP SSE request to %s", request->url);
 
   CURL* curl = curl_easy_init();
-  if (!curl) return false;
+  if (!curl) return ERROR_CURL;
 
   struct curl_slist* headers = NULL;
   for (size_t i = 0; i < request->n_header; ++i) {
@@ -174,16 +163,17 @@ bool http_sse(const request_t* request,
   if (res != CURLE_OK) {
     curl_easy_cleanup(curl);
     log(ERROR, "curl error: %s", curl_easy_strerror(res));
-    return false;
+    return ERROR_CURL;
   }
+
   long status;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
   if (status != 200) {
     log(ERROR, "HTTP request failed with status %ld", status);
     curl_easy_cleanup(curl);
-    return false;
+    return ERROR_CURL;
   }
 
   curl_easy_cleanup(curl);
-  return true;
+  return ERROR_NONE;
 }
