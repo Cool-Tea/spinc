@@ -3,6 +3,8 @@
 !src/
 src/**/*.o
 src/**/*.o.debug
+src/**/*.d
+src/**/*.o.d
 src/config.h
 !Makefile
 !.gitignore
