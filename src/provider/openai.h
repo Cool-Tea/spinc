@@ -11,6 +11,10 @@ bool openai_done_marker(const char* data, size_t len);
 err_t openai_update_full(pctx_t* ctx, jnode_t* jfirst);
 err_t openai_update_stream(pctx_t* ctx, jnode_t* jfirst, jnode_t* jdelta);
 
+// Convert the general conversation into the OpenAI Chat Completions "messages"
+// array (system prompt prepended, assistant turns grouped).
+jnode_t* openai_messages_to_json(const pctx_t* ctx, jnode_t* jarr);
+
 err_t cc_create_context(void** context);
 void cc_delete_context(void* context);
 err_t cc_serialize(void* context, char** data, size_t* len);

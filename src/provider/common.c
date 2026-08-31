@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "sjson.h"
 
@@ -10,10 +11,10 @@ err_t pctx_new(pctx_t** out) {
   *out = NULL;
   pctx_t* ctx = calloc(1, sizeof(pctx_t));
   if (!ctx) return ERROR_OUT_OF_MEMORY;
-  ctx->messages = jarray_new();
-  if (!ctx->messages) {
+  err_t err = msglist_new(&ctx->messages);
+  if (err != ERROR_NONE) {
     free(ctx);
-    return ERROR_OUT_OF_MEMORY;
+    return err;
   }
   *out = ctx;
   return ERROR_NONE;
@@ -22,9 +23,10 @@ err_t pctx_new(pctx_t** out) {
 static void pctx_free_latest_calls(pctx_t* ctx) {
   if (!ctx->latest_calls) return;
   for (size_t i = 0; i < ctx->n_latest_call; ++i) {
-    free((void*)ctx->latest_calls[i].id);
-    free((void*)ctx->latest_calls[i].name);
-    free((void*)ctx->latest_calls[i].args);
+    free(ctx->latest_calls[i].id);
+    free(ctx->latest_calls[i].call_id);
+    free(ctx->latest_calls[i].name);
+    free(ctx->latest_calls[i].args);
   }
   free(ctx->latest_calls);
   ctx->latest_calls = NULL;
@@ -47,42 +49,118 @@ void pctx_delete(pctx_t* ctx) {
   if (!ctx) return;
   free(ctx->model);
   free(ctx->system_prompt);
-  if (ctx->snapshot) jdelete(ctx->snapshot);
-  if (ctx->messages) jdelete(ctx->messages);
+  free(ctx->stream_turn_id);
+  if (ctx->snapshot) msglist_delete(ctx->snapshot);
+  if (ctx->messages) msglist_delete(ctx->messages);
   pctx_clear_latest(ctx);
   free(ctx);
 }
 
 void pctx_take_snapshot(pctx_t* ctx) {
   if (!ctx || ctx->snapshot) return;
-  ctx->snapshot = jcopy(ctx->messages);
+  msglist_copy(ctx->messages, &ctx->snapshot);
 }
 
 void pctx_rewind(pctx_t* ctx) {
   if (!ctx) return;
   if (ctx->snapshot) {
-    jdelete(ctx->messages);
+    msglist_delete(ctx->messages);
     ctx->messages = ctx->snapshot;
     ctx->snapshot = NULL;
   }
+  free(ctx->stream_turn_id);
+  ctx->stream_turn_id = NULL;
   pctx_clear_latest(ctx);
 }
 
 void pctx_clear_messages(pctx_t* ctx) {
   if (!ctx) return;
   if (ctx->snapshot) {
-    jdelete(ctx->snapshot);
+    msglist_delete(ctx->snapshot);
     ctx->snapshot = NULL;
   }
-  jdelete(ctx->messages);
-  ctx->messages = jarray_new();
+  if (ctx->messages) msglist_delete(ctx->messages);
+  msglist_new(&ctx->messages);
+  free(ctx->stream_turn_id);
+  ctx->stream_turn_id = NULL;
   pctx_clear_latest(ctx);
 }
 
 void pctx_pop_message(pctx_t* ctx) {
   if (!ctx || !ctx->messages) return;
-  if (jarray_size(ctx->messages) > 0) jarray_pop(ctx->messages);
+  if (ctx->messages->n_message > 0) msglist_pop_message_delete(ctx->messages);
   pctx_clear_latest(ctx);
+}
+
+char* pctx_new_turn_id(void) {
+  static size_t counter = 0;
+  char buf[64];
+  snprintf(buf, sizeof(buf), "turn_%zu", counter++);
+  return strdup(buf);
+}
+
+err_t pctx_append_text(char** text, size_t* text_len, const char* frag) {
+  if (!text || !frag) return ERROR_NULLPTR;
+  jnode_t* js = jstring_new(0, *text ? *text : "");
+  if (!js) return ERROR_OUT_OF_MEMORY;
+  jstring_concat(js, frag);
+  char* joined = strdup(jstring_content(js));
+  jdelete(js);
+  if (!joined) return ERROR_OUT_OF_MEMORY;
+  free(*text);
+  *text = joined;
+  if (text_len) *text_len = strlen(joined);
+  return ERROR_NONE;
+}
+
+err_t pctx_add_user_message(pctx_t* ctx, const char* text) {
+  if (!ctx || !text) return ERROR_NULLPTR;
+  message_t* m = message_new(USER);
+  if (!m) return ERROR_OUT_OF_MEMORY;
+  m->user.text = strdup(text);
+  if (!m->user.text) {
+    message_delete(m);
+    return ERROR_OUT_OF_MEMORY;
+  }
+  m->user.text_len = strlen(m->user.text);
+  return msglist_add_message(ctx->messages, m);
+}
+
+err_t pctx_add_assistant_message(pctx_t* ctx, const char* text) {
+  if (!ctx || !text) return ERROR_NULLPTR;
+  message_t* m = message_new(ASSISTANT);
+  if (!m) return ERROR_OUT_OF_MEMORY;
+  m->assistant.text = strdup(text);
+  if (!m->assistant.text) {
+    message_delete(m);
+    return ERROR_OUT_OF_MEMORY;
+  }
+  m->assistant.text_len = strlen(m->assistant.text);
+  return msglist_add_message(ctx->messages, m);
+}
+
+err_t pctx_add_tool_message(pctx_t* ctx, const char* call_id,
+                            const char* tool_name, const char* result) {
+  if (!ctx || !call_id || !result) return ERROR_NULLPTR;
+  message_t* m = message_new(TOOL_RESULT);
+  if (!m) return ERROR_OUT_OF_MEMORY;
+  m->tool_result.call_id = strdup(call_id);
+  m->tool_result.name = tool_name ? strdup(tool_name) : NULL;
+  m->tool_result.result = strdup(result);
+  if (!m->tool_result.call_id || !m->tool_result.result ||
+      (tool_name && !m->tool_result.name)) {
+    message_delete(m);
+    return ERROR_OUT_OF_MEMORY;
+  }
+  m->tool_result.call_id_len = strlen(m->tool_result.call_id);
+  if (m->tool_result.name)
+    m->tool_result.name_len = strlen(m->tool_result.name);
+  m->tool_result.result_len = strlen(m->tool_result.result);
+  return msglist_add_message(ctx->messages, m);
+}
+
+size_t pctx_message_count(const pctx_t* ctx) {
+  return ctx ? ctx->messages->n_message : 0;
 }
 
 err_t pctx_set_tool_calls(pctx_t* ctx, size_t n, const char* const* ids,
@@ -96,8 +174,8 @@ err_t pctx_set_tool_calls(pctx_t* ctx, size_t n, const char* const* ids,
   for (size_t i = 0; i < n; ++i) {
     toolcall_t* call = &ctx->latest_calls[i];
     if (ids && ids[i]) {
-      call->id = strdup(ids[i]);
-      call->id_len = strlen(ids[i]);
+      call->call_id = strdup(ids[i]);
+      call->call_id_len = strlen(ids[i]);
     }
     if (names && names[i]) {
       call->name = strdup(names[i]);
@@ -124,6 +202,54 @@ err_t pctx_latest_tool_calls(pctx_t* ctx, toolcall_t** calls, size_t* n) {
   return ERROR_NONE;
 }
 
+// Rebuild latest_calls from the TOOL_CALL messages of the trailing assistant
+// turn (a suffix of REASONING/ASSISTANT/TOOL_CALL messages sharing one id).
+err_t pctx_latest_calls_from_turn(pctx_t* ctx) {
+  if (!ctx || !ctx->messages) return ERROR_NULLPTR;
+  size_t n = ctx->messages->n_message;
+  const char* tid = NULL;
+  size_t start = n;
+  for (size_t i = n; i > 0; --i) {
+    message_t* m = &ctx->messages->messages[i - 1];
+    if (m->type != REASONING && m->type != ASSISTANT && m->type != TOOL_CALL)
+      break;
+    const char* mid = message_id(m);
+    if (!tid) tid = mid;
+    if (mid && tid && strcmp(mid, tid) != 0) break;
+    start = i - 1;
+  }
+
+  size_t n_tool = 0;
+  for (size_t i = start; i < n; ++i) {
+    if (ctx->messages->messages[i].type == TOOL_CALL) ++n_tool;
+  }
+  if (n_tool == 0) return pctx_set_tool_calls(ctx, 0, NULL, NULL, NULL);
+
+  const char** ids = calloc(n_tool, sizeof(char*));
+  const char** names = calloc(n_tool, sizeof(char*));
+  const char** args = calloc(n_tool, sizeof(char*));
+  if (!ids || !names || !args) {
+    free(ids);
+    free(names);
+    free(args);
+    return ERROR_OUT_OF_MEMORY;
+  }
+  size_t k = 0;
+  for (size_t i = start; i < n && k < n_tool; ++i) {
+    message_t* m = &ctx->messages->messages[i];
+    if (m->type != TOOL_CALL) continue;
+    ids[k] = m->tool_call.call_id;
+    names[k] = m->tool_call.name;
+    args[k] = m->tool_call.args;
+    ++k;
+  }
+  err_t err = pctx_set_tool_calls(ctx, k, ids, names, args);
+  free(ids);
+  free(names);
+  free(args);
+  return err;
+}
+
 err_t pctx_serialize(const pctx_t* ctx, char** data, size_t* len) {
   if (!ctx || !data || !len) return ERROR_NULLPTR;
   *data = NULL;
@@ -132,7 +258,13 @@ err_t pctx_serialize(const pctx_t* ctx, char** data, size_t* len) {
   if (!root) return ERROR_OUT_OF_MEMORY;
   jobject_put(root, "system_prompt",
               jstring_new(0, ctx->system_prompt ? ctx->system_prompt : ""));
-  jobject_put(root, "messages", jcopy(ctx->messages));
+  jnode_t* jmsg = NULL;
+  err_t err = msglist_to_json(ctx->messages, &jmsg);
+  if (err != ERROR_NONE) {
+    jdelete(root);
+    return err;
+  }
+  jobject_put(root, "messages", jmsg);
   *data = jto_string(root);
   jdelete(root);
   if (!*data) return ERROR_OUT_OF_MEMORY;
@@ -155,8 +287,12 @@ err_t pctx_deserialize(const char* data, size_t len, pctx_t** out) {
   if (jis_string(jsp)) ctx->system_prompt = strdup(jstring_content(jsp));
   jnode_t* jmsg = jobject_get(root, "messages");
   if (jis_array(jmsg)) {
-    jdelete(ctx->messages);
-    ctx->messages = jcopy(jmsg);
+    msglist_t* ml = NULL;
+    err = msglist_from_json(jmsg, &ml);
+    if (err == ERROR_NONE) {
+      msglist_delete(ctx->messages);
+      ctx->messages = ml;
+    }
   }
   jdelete(root);
   *out = ctx;

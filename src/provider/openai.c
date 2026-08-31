@@ -22,6 +22,113 @@ static jnode_t* openai_system_message(const char* content) {
   return jmessage;
 }
 
+static jnode_t* openai_message(const char* role, const char* content) {
+  jnode_t* jmessage = jobject_new();
+  jobject_put(jmessage, "role", jstring_new(0, role));
+  jobject_put(jmessage, "content", jstring_new(0, content ? content : ""));
+  return jmessage;
+}
+
+// Messages with NULL ids (or equal ids) belong to the same assistant turn.
+static bool openai_same_turn(const char* a, const char* b) {
+  if (!a || !b) return true;
+  return strcmp(a, b) == 0;
+}
+
+// Convert the general message list into the OpenAI Chat Completions "messages"
+// array. An assistant turn (REASONING/ASSISTANT/TOOL_CALL sharing one id) is
+// grouped into a single assistant message: reasoning goes to
+// reasoning_content (DeepSeek only), text to content, and tool calls to the
+// tool_calls array. Tool results become role "tool" messages.
+jnode_t* openai_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
+  // The system prompt is prepended here so the stored conversation only holds
+  // user/assistant/tool messages.
+  jarray_add(jarr, openai_system_message(ctx->system_prompt));
+
+  jnode_t* jcur = NULL;       // assistant message being built
+  const char* cur_id = NULL;  // turn id of the current assistant message
+  for (size_t i = 0; i < ctx->messages->n_message; ++i) {
+    const message_t* m = &ctx->messages->messages[i];
+    switch (m->type) {
+      case SYSTEM:
+        jarray_add(jarr, openai_system_message(m->system.text));
+        jcur = NULL;
+        cur_id = NULL;
+        break;
+      case USER:
+        jarray_add(jarr, openai_message("user", m->user.text));
+        jcur = NULL;
+        cur_id = NULL;
+        break;
+      case ASSISTANT: {
+        const char* mid = message_id(m);
+        if (!jcur || !openai_same_turn(cur_id, mid)) {
+          jcur = openai_message("assistant", "");
+          jarray_add(jarr, jcur);
+          cur_id = mid;
+        }
+        jobject_put(jcur, "content",
+                    jstring_new(0, m->assistant.text ? m->assistant.text : ""));
+        break;
+      }
+      case REASONING: {
+        if (!ctx->use_reasoning_content) break;
+        const char* mid = message_id(m);
+        if (!jcur || !openai_same_turn(cur_id, mid)) {
+          jcur = openai_message("assistant", "");
+          jarray_add(jarr, jcur);
+          cur_id = mid;
+        }
+        jobject_put(jcur, "reasoning_content",
+                    jstring_new(0, m->reasoning.text ? m->reasoning.text : ""));
+        break;
+      }
+      case TOOL_CALL: {
+        const char* mid = message_id(m);
+        if (!jcur || !openai_same_turn(cur_id, mid)) {
+          jcur = openai_message("assistant", "");
+          jarray_add(jarr, jcur);
+          cur_id = mid;
+        }
+        jnode_t* jcalls = jobject_get(jcur, "tool_calls");
+        if (!jis_array(jcalls)) {
+          jcalls = jarray_new();
+          jobject_put(jcur, "tool_calls", jcalls);
+        }
+        jnode_t* jcall = jobject_new();
+        jobject_put(
+            jcall, "id",
+            jstring_new(0, m->tool_call.call_id ? m->tool_call.call_id : ""));
+        jobject_put(jcall, "type", jstring_new(0, "function"));
+        jnode_t* jfunc = jobject_new();
+        jobject_put(jcall, "function", jfunc);
+        jobject_put(jfunc, "name",
+                    jstring_new(0, m->tool_call.name ? m->tool_call.name : ""));
+        jobject_put(jfunc, "arguments",
+                    jstring_new(0, m->tool_call.args ? m->tool_call.args : ""));
+        jarray_add(jcalls, jcall);
+        break;
+      }
+      case TOOL_RESULT: {
+        jnode_t* jm = jobject_new();
+        jobject_put(jm, "role", jstring_new(0, "tool"));
+        jobject_put(
+            jm, "tool_call_id",
+            jstring_new(0,
+                        m->tool_result.call_id ? m->tool_result.call_id : ""));
+        jobject_put(
+            jm, "content",
+            jstring_new(0, m->tool_result.result ? m->tool_result.result : ""));
+        jarray_add(jarr, jm);
+        jcur = NULL;
+        cur_id = NULL;
+        break;
+      }
+    }
+  }
+  return jarr;
+}
+
 static jnode_t* openai_serialize_tool(const tool_t* tool) {
   const tooldef_t* tooldef = &tool->def;
   jnode_t* jtool = jobject_new();
@@ -55,14 +162,9 @@ static jnode_t* openai_body(const pctx_t* ctx, bool stream) {
   jnode_t* jbody = jobject_new();
   jobject_put(jbody, "model", jstring_new(0, ctx->model->name));
 
-  // The system prompt is prepended here so the stored conversation only holds
-  // user/assistant/tool messages.
-  jnode_t* jmessages = jarray_new();
-  jobject_put(jbody, "messages", jmessages);
-  jarray_add(jmessages, openai_system_message(ctx->system_prompt));
-  for (int i = 0; i < jarray_size(ctx->messages); ++i) {
-    jarray_add(jmessages, jcopy(jarray_get(ctx->messages, i)));
-  }
+  // Convert the general conversation into the API-specific messages array
+  // (the system prompt is prepended by openai_messages_to_json).
+  jobject_put(jbody, "messages", openai_messages_to_json(ctx, jarray_new()));
 
   jnode_t* jtools = jarray_new();
   jobject_put(jbody, "tools", jtools);
@@ -145,46 +247,212 @@ bool openai_done_marker(const char* data, size_t len) {
   return len == 6 && memcmp(data, "[DONE]", 6) == 0;
 }
 
-static err_t openai_build_tool_calls(pctx_t* ctx, jnode_t* jtool_calls) {
-  if (!jis_array(jtool_calls) || jarray_size(jtool_calls) == 0) {
-    return ERROR_NONE;
+// Streaming helpers ---------------------------------------------------------
+
+// Return (and lazily create) the id of the assistant turn being accumulated by
+// the stream. A fresh id is generated when the trailing messages no longer
+// belong to the current stream turn.
+static const char* openai_stream_turn_id(pctx_t* ctx) {
+  size_t n = ctx->messages->n_message;
+  if (ctx->stream_turn_id && n > 0) {
+    message_t* last = &ctx->messages->messages[n - 1];
+    if (last->type == REASONING || last->type == ASSISTANT ||
+        last->type == TOOL_CALL) {
+      const char* mid = message_id(last);
+      if (mid && strcmp(mid, ctx->stream_turn_id) == 0) {
+        return ctx->stream_turn_id;
+      }
+    }
   }
-  size_t n = jarray_size(jtool_calls);
-  const char** ids = calloc(n, sizeof(char*));
-  const char** names = calloc(n, sizeof(char*));
-  const char** args = calloc(n, sizeof(char*));
-  if (!ids || !names || !args) {
-    free(ids);
-    free(names);
-    free(args);
-    return ERROR_OUT_OF_MEMORY;
-  }
-  for (size_t i = 0; i < n; ++i) {
-    jnode_t* jcall = jarray_get(jtool_calls, i);
-    jnode_t* jid = jobject_get(jcall, "id");
-    jnode_t* jfunc = jobject_get(jcall, "function");
-    jnode_t* jname = jfunc ? jobject_get(jfunc, "name") : NULL;
-    jnode_t* jargs = jfunc ? jobject_get(jfunc, "arguments") : NULL;
-    ids[i] = jis_string(jid) ? jstring_content(jid) : NULL;
-    names[i] = jis_string(jname) ? jstring_content(jname) : NULL;
-    args[i] = jis_string(jargs) ? jstring_content(jargs) : NULL;
-  }
-  err_t err = pctx_set_tool_calls(ctx, n, ids, names, args);
-  free(ids);
-  free(names);
-  free(args);
-  return err;
+  free(ctx->stream_turn_id);
+  ctx->stream_turn_id = pctx_new_turn_id();
+  return ctx->stream_turn_id;
 }
 
-// Non-streaming response: append the assistant message and expose the latest
-// state.
+// Get the trailing message of `type` within the current stream turn, creating
+// it (with the turn id) if absent.
+static err_t openai_ensure_turn_message(pctx_t* ctx, msgtyp_t type,
+                                        message_t** out) {
+  *out = NULL;
+  const char* tid = openai_stream_turn_id(ctx);
+  if (!tid) return ERROR_OUT_OF_MEMORY;
+  size_t n = ctx->messages->n_message;
+  for (size_t i = n; i > 0; --i) {
+    message_t* m = &ctx->messages->messages[i - 1];
+    if (m->type != REASONING && m->type != ASSISTANT && m->type != TOOL_CALL)
+      break;
+    const char* mid = message_id(m);
+    if (mid && tid && strcmp(mid, tid) != 0) break;
+    if (m->type == type) {
+      *out = m;
+      return ERROR_NONE;
+    }
+  }
+  message_t* m = message_new(type);
+  if (!m) return ERROR_OUT_OF_MEMORY;
+  if (message_set_id(m, tid) != ERROR_NONE) {
+    message_delete(m);
+    return ERROR_OUT_OF_MEMORY;
+  }
+  msglist_add_message(ctx->messages, m);
+  // msglist_add_message takes ownership of the wrapper; return the slot.
+  *out = &ctx->messages->messages[ctx->messages->n_message - 1];
+  return ERROR_NONE;
+}
+
+// Get (or create) the TOOL_CALL message at stream `index` within the current
+// turn. Gaps are filled so out-of-order fragments are merged correctly.
+static err_t openai_stream_tool_call(pctx_t* ctx, int index, message_t** out) {
+  *out = NULL;
+  if (index < 0) return ERROR_NONE;
+  const char* tid = openai_stream_turn_id(ctx);
+  if (!tid) return ERROR_OUT_OF_MEMORY;
+  size_t n = ctx->messages->n_message;
+  size_t start = n;
+  for (size_t i = n; i > 0; --i) {
+    message_t* m = &ctx->messages->messages[i - 1];
+    if (m->type != REASONING && m->type != ASSISTANT && m->type != TOOL_CALL)
+      break;
+    const char* mid = message_id(m);
+    if (mid && tid && strcmp(mid, tid) != 0) break;
+    start = i - 1;
+  }
+  size_t existing = 0;
+  for (size_t i = start; i < n; ++i) {
+    message_t* m = &ctx->messages->messages[i];
+    if (m->type != TOOL_CALL) continue;
+    if (existing == (size_t)index) {
+      *out = m;
+      return ERROR_NONE;
+    }
+    ++existing;
+  }
+  // Append new tool-call messages until `index` is covered.
+  for (size_t k = existing; k <= (size_t)index; ++k) {
+    message_t* m = message_new(TOOL_CALL);
+    if (!m) return ERROR_OUT_OF_MEMORY;
+    if (message_set_id(m, tid) != ERROR_NONE) {
+      message_delete(m);
+      return ERROR_OUT_OF_MEMORY;
+    }
+    msglist_add_message(ctx->messages, m);
+    // msglist_add_message takes ownership of the wrapper; return the slot.
+    *out = &ctx->messages->messages[ctx->messages->n_message - 1];
+  }
+  return ERROR_NONE;
+}
+
+// Non-streaming response: convert the assistant message into general
+// REASONING/ASSISTANT/TOOL_CALL messages (all sharing one turn id) and expose
+// the latest state.
 err_t openai_update_full(pctx_t* ctx, jnode_t* jfirst) {
   jnode_t* jmessage = jobject_get(jfirst, "message");
   if (!jmessage) {
     log(ERROR, "Response missing message");
     return ERROR_UNKNOWN;
   }
-  jarray_add(ctx->messages, jcopy(jmessage));
+
+  char* turn_id = pctx_new_turn_id();
+  if (!turn_id) return ERROR_OUT_OF_MEMORY;
+
+  // reasoning_content (DeepSeek and some compatible endpoints).
+  jnode_t* jreasoning = jobject_get(jmessage, "reasoning_content");
+  if (jis_string(jreasoning) && jstring_len(jreasoning)) {
+    message_t* m = message_new(REASONING);
+    if (!m) {
+      free(turn_id);
+      return ERROR_OUT_OF_MEMORY;
+    }
+    m->reasoning.text = strdup(jstring_content(jreasoning));
+    if (!m->reasoning.text) {
+      message_delete(m);
+      free(turn_id);
+      return ERROR_OUT_OF_MEMORY;
+    }
+    m->reasoning.text_len = strlen(m->reasoning.text);
+    if (message_set_id(m, turn_id) != ERROR_NONE) {
+      message_delete(m);
+      free(turn_id);
+      return ERROR_OUT_OF_MEMORY;
+    }
+    msglist_add_message(ctx->messages, m);
+    ctx->latest_reasoning = strdup(jstring_content(jreasoning));
+  }
+
+  // content (string, or an array of text blocks on some endpoints).
+  char* content_text = NULL;
+  jnode_t* jcontent = jobject_get(jmessage, "content");
+  if (jis_string(jcontent) && jstring_len(jcontent)) {
+    content_text = strdup(jstring_content(jcontent));
+  } else if (jis_array(jcontent)) {
+    jnode_t* jacc = jstring_new(0, "");
+    for (int i = 0; i < jarray_size(jcontent); ++i) {
+      jnode_t* jblock = jarray_get(jcontent, i);
+      jnode_t* jtype = jobject_get(jblock, "type");
+      if (jis_string(jtype) && strcmp(jstring_content(jtype), "text") == 0) {
+        jnode_t* jtext = jobject_get(jblock, "text");
+        if (jis_string(jtext)) jstring_concat(jacc, jstring_content(jtext));
+      }
+    }
+    if (jstring_len(jacc)) content_text = strdup(jstring_content(jacc));
+    jdelete(jacc);
+  }
+  if (content_text) {
+    message_t* m = message_new(ASSISTANT);
+    if (!m) {
+      free(content_text);
+      free(turn_id);
+      return ERROR_OUT_OF_MEMORY;
+    }
+    m->assistant.text = content_text;
+    m->assistant.text_len = strlen(content_text);
+    if (message_set_id(m, turn_id) != ERROR_NONE) {
+      message_delete(m);
+      free(turn_id);
+      return ERROR_OUT_OF_MEMORY;
+    }
+    msglist_add_message(ctx->messages, m);
+    ctx->latest_content = strdup(content_text);
+  }
+
+  // tool_calls.
+  jnode_t* jtool_calls = jobject_get(jmessage, "tool_calls");
+  if (jis_array(jtool_calls)) {
+    for (int i = 0; i < jarray_size(jtool_calls); ++i) {
+      jnode_t* jcall = jarray_get(jtool_calls, i);
+      jnode_t* jfunc = jobject_get(jcall, "function");
+      jnode_t* jid = jobject_get(jcall, "id");
+      jnode_t* jname = jfunc ? jobject_get(jfunc, "name") : NULL;
+      jnode_t* jargs = jfunc ? jobject_get(jfunc, "arguments") : NULL;
+      message_t* m = message_new(TOOL_CALL);
+      if (!m) {
+        free(turn_id);
+        return ERROR_OUT_OF_MEMORY;
+      }
+      if (message_set_id(m, turn_id) != ERROR_NONE) {
+        message_delete(m);
+        free(turn_id);
+        return ERROR_OUT_OF_MEMORY;
+      }
+      if (jis_string(jid)) {
+        m->tool_call.call_id = strdup(jstring_content(jid));
+        m->tool_call.call_id_len =
+            m->tool_call.call_id ? strlen(m->tool_call.call_id) : 0;
+      }
+      if (jis_string(jname)) {
+        m->tool_call.name = strdup(jstring_content(jname));
+        m->tool_call.name_len =
+            m->tool_call.name ? strlen(m->tool_call.name) : 0;
+      }
+      if (jis_string(jargs)) {
+        m->tool_call.args = strdup(jstring_content(jargs));
+        m->tool_call.args_len =
+            m->tool_call.args ? strlen(m->tool_call.args) : 0;
+      }
+      msglist_add_message(ctx->messages, m);
+    }
+  }
+  free(turn_id);
 
   jnode_t* jfinish = jobject_get(jfirst, "finish_reason");
   const char* finish = jis_string(jfinish) ? jstring_content(jfinish) : NULL;
@@ -194,103 +462,89 @@ err_t openai_update_full(pctx_t* ctx, jnode_t* jfirst) {
     ctx->finished = (strcmp(finish, "tool_calls") != 0);
     if (strcmp(finish, "tool_calls") == 0) {
       ctx->tool_calls_ready = true;
-      err_t err =
-          openai_build_tool_calls(ctx, jobject_get(jmessage, "tool_calls"));
+      err_t err = pctx_latest_calls_from_turn(ctx);
       if (err != ERROR_NONE) return err;
     }
   }
-
-  jnode_t* jcontent = jobject_get(jmessage, "content");
-  if (jis_string(jcontent) && jstring_len(jcontent)) {
-    ctx->latest_content = strdup(jstring_content(jcontent));
-  }
-
   return ERROR_NONE;
 }
 
-// Streaming delta: merge into the last assistant message. Tool calls are only
+// Streaming delta: merge into the trailing assistant turn. Tool calls are only
 // exposed once the finish_reason arrives, so partial fragments are never
 // executed.
 err_t openai_update_stream(pctx_t* ctx, jnode_t* jfirst, jnode_t* jdelta) {
+  // role delta: begin (or continue) the assistant turn.
   jnode_t* jdelta_role = jobject_get(jdelta, "role");
   if (jis_string(jdelta_role)) {
-    const char* role = jstring_content(jdelta_role);
-    jnode_t* jlast =
-        jarray_size(ctx->messages) > 0
-            ? jarray_get(ctx->messages, jarray_size(ctx->messages) - 1)
-            : NULL;
-    const char* last_role = NULL;
-    if (jlast) {
-      jnode_t* jlr = jobject_get(jlast, "role");
-      if (jis_string(jlr)) last_role = jstring_content(jlr);
-    }
-    if (!jlast || !last_role || strcmp(last_role, role) != 0) {
-      jnode_t* jmessage = jobject_new();
-      jobject_put(jmessage, "role", jstring_new(0, role));
-      jarray_add(ctx->messages, jmessage);
+    if (strcmp(jstring_content(jdelta_role), "assistant") == 0) {
+      openai_stream_turn_id(ctx);
     }
   }
-  if (jarray_size(ctx->messages) == 0) return ERROR_NONE;
-  jnode_t* jlast = jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
 
+  // reasoning_content (DeepSeek).
+  jnode_t* jreasoning = jobject_get(jdelta, "reasoning_content");
+  if (jis_string(jreasoning) && jstring_len(jreasoning)) {
+    message_t* m = NULL;
+    err_t err = openai_ensure_turn_message(ctx, REASONING, &m);
+    if (err != ERROR_NONE) return err;
+    err = pctx_append_text(&m->reasoning.text, &m->reasoning.text_len,
+                           jstring_content(jreasoning));
+    if (err != ERROR_NONE) return err;
+    free(ctx->latest_reasoning);
+    ctx->latest_reasoning = strdup(jstring_content(jreasoning));
+  }
+
+  // content.
   jnode_t* jcontent = jobject_get(jdelta, "content");
-  if (jis_string(jcontent)) {
+  if (jis_string(jcontent) && jstring_len(jcontent)) {
+    message_t* m = NULL;
+    err_t err = openai_ensure_turn_message(ctx, ASSISTANT, &m);
+    if (err != ERROR_NONE) return err;
+    err = pctx_append_text(&m->assistant.text, &m->assistant.text_len,
+                           jstring_content(jcontent));
+    if (err != ERROR_NONE) return err;
     free(ctx->latest_content);
     ctx->latest_content = strdup(jstring_content(jcontent));
-    jnode_t* jmsg_content = jobject_get(jlast, "content");
-    if (!jis_string(jmsg_content)) {
-      jobject_put(jlast, "content", jcopy(jcontent));
-    } else {
-      jstring_concat(jmsg_content, jstring_content(jcontent));
-    }
   }
 
+  // tool_calls fragments.
   jnode_t* jtool_calls = jobject_get(jdelta, "tool_calls");
   if (jis_array(jtool_calls)) {
-    jnode_t* jlast_calls = jobject_get(jlast, "tool_calls");
-    if (!jis_array(jlast_calls)) {
-      jlast_calls = jarray_new();
-      jobject_put(jlast, "tool_calls", jlast_calls);
-    }
-    size_t n = jarray_size(jtool_calls);
-    for (size_t i = 0; i < n; ++i) {
+    for (int i = 0; i < jarray_size(jtool_calls); ++i) {
       jnode_t* jdc = jarray_get(jtool_calls, i);
       jnode_t* jindex_node = jobject_get(jdc, "index");
-      int index = jis_number(jindex_node) ? (int)jas_number(jindex_node)->value
-                                          : (int)jarray_size(jlast_calls);
-      if (index >= jarray_size(jlast_calls)) {
-        jarray_add(jlast_calls, jcopy(jdc));
-        continue;
-      }
-      jnode_t* jlc = jarray_get(jlast_calls, index);
+      int index =
+          jis_number(jindex_node) ? (int)jas_number(jindex_node)->value : -1;
+      message_t* m = NULL;
+      err_t err = openai_stream_tool_call(ctx, index, &m);
+      if (err != ERROR_NONE) return err;
+      if (!m) continue;
 
       jnode_t* jdid = jobject_get(jdc, "id");
-      if (jis_string(jdid) && !jis_string(jobject_get(jlc, "id"))) {
-        jobject_put(jlc, "id", jcopy(jdid));
+      if (jis_string(jdid) && !m->tool_call.call_id) {
+        m->tool_call.call_id = strdup(jstring_content(jdid));
+        m->tool_call.call_id_len =
+            m->tool_call.call_id ? strlen(m->tool_call.call_id) : 0;
       }
-
       jnode_t* jdf = jobject_get(jdc, "function");
-      if (jis_empty(jdf)) continue;
-      jnode_t* jlf = jobject_get(jlc, "function");
-      if (jis_empty(jlf)) {
-        jobject_put(jlc, "function", jcopy(jdf));
-        continue;
-      }
-      jnode_t* jdn = jobject_get(jdf, "name");
-      if (jis_string(jdn)) {
-        jnode_t* jln = jobject_get(jlf, "name");
-        if (jis_empty(jln)) jobject_put(jlf, "name", jcopy(jdn));
-        else jstring_concat(jln, jstring_content(jdn));
-      }
-      jnode_t* jda = jobject_get(jdf, "arguments");
-      if (jis_string(jda)) {
-        jnode_t* jla = jobject_get(jlf, "arguments");
-        if (jis_empty(jla)) jobject_put(jlf, "arguments", jcopy(jda));
-        else jstring_concat(jla, jstring_content(jda));
+      if (jis_object(jdf)) {
+        jnode_t* jdn = jobject_get(jdf, "name");
+        if (jis_string(jdn)) {
+          err = pctx_append_text(&m->tool_call.name, &m->tool_call.name_len,
+                                 jstring_content(jdn));
+          if (err != ERROR_NONE) return err;
+        }
+        jnode_t* jda = jobject_get(jdf, "arguments");
+        if (jis_string(jda)) {
+          err = pctx_append_text(&m->tool_call.args, &m->tool_call.args_len,
+                                 jstring_content(jda));
+          if (err != ERROR_NONE) return err;
+        }
       }
     }
   }
 
+  // finish_reason.
   jnode_t* jfinish = jobject_get(jfirst, "finish_reason");
   if (jis_string(jfinish)) {
     const char* finish = jstring_content(jfinish);
@@ -300,10 +554,11 @@ err_t openai_update_stream(pctx_t* ctx, jnode_t* jfirst, jnode_t* jdelta) {
     if (strcmp(finish, "tool_calls") != 0) ctx->finished = true;
     if (strcmp(finish, "tool_calls") == 0) {
       ctx->tool_calls_ready = true;
-      err_t err =
-          openai_build_tool_calls(ctx, jobject_get(jlast, "tool_calls"));
+      err_t err = pctx_latest_calls_from_turn(ctx);
       if (err != ERROR_NONE) return err;
     }
+    free(ctx->stream_turn_id);
+    ctx->stream_turn_id = NULL;
   }
   return ERROR_NONE;
 }
@@ -373,41 +628,20 @@ const char* cc_get_system_prompt(void* context) {
 }
 
 size_t cc_message_count(void* context) {
-  pctx_t* ctx = context;
-  return ctx ? (size_t)jarray_size(ctx->messages) : 0;
-}
-
-static err_t cc_add_message(pctx_t* ctx, const char* role,
-                            const char* content) {
-  if (!ctx || !role || !content) return ERROR_NULLPTR;
-  jnode_t* jmessage = jobject_new();
-  if (!jmessage) return ERROR_OUT_OF_MEMORY;
-  jobject_put(jmessage, "role", jstring_new(0, role));
-  jobject_put(jmessage, "content", jstring_new(0, content));
-  jarray_add(ctx->messages, jmessage);
-  return ERROR_NONE;
+  return pctx_message_count((const pctx_t*)context);
 }
 
 err_t cc_add_user_message(void* context, const char* message) {
-  return cc_add_message((pctx_t*)context, "user", message);
+  return pctx_add_user_message((pctx_t*)context, message);
 }
 
 err_t cc_add_assistant_message(void* context, const char* message) {
-  return cc_add_message((pctx_t*)context, "assistant", message);
+  return pctx_add_assistant_message((pctx_t*)context, message);
 }
 
 err_t cc_add_tool_message(void* context, const char* id, const char* tool_name,
                           const char* result) {
-  (void)tool_name;
-  pctx_t* ctx = context;
-  if (!ctx || !id || !result) return ERROR_NULLPTR;
-  jnode_t* jmessage = jobject_new();
-  if (!jmessage) return ERROR_OUT_OF_MEMORY;
-  jobject_put(jmessage, "role", jstring_new(0, "tool"));
-  jobject_put(jmessage, "tool_call_id", jstring_new(0, id));
-  jobject_put(jmessage, "content", jstring_new(0, result));
-  jarray_add(ctx->messages, jmessage);
-  return ERROR_NONE;
+  return pctx_add_tool_message((pctx_t*)context, id, tool_name, result);
 }
 
 void cc_clear_messages(void* context) { pctx_clear_messages((pctx_t*)context); }
@@ -420,18 +654,21 @@ err_t cc_call(void* context, char** response, size_t* len) {
   if (!ctx->model) return ERROR_NULLPTR;
   *response = NULL;
   *len = 0;
-  // A new turn starts; drop the previous snapshot and finished state.
+  // A new turn starts; drop the previous snapshot, stream id and finished
+  // state.
   if (ctx->snapshot) {
-    jdelete(ctx->snapshot);
+    msglist_delete(ctx->snapshot);
     ctx->snapshot = NULL;
   }
+  free(ctx->stream_turn_id);
+  ctx->stream_turn_id = NULL;
   ctx->finished = false;
 
   response_t resp = {0};
   err_t err = openai_http_call(ctx, false, &resp);
   if (err != ERROR_NONE) return err;
   *response = (char*)resp.data;  // owned by the caller now
-  *len = resp.data_size;
+  *len = resp.data_len;
   return ERROR_NONE;
 }
 
@@ -451,9 +688,11 @@ err_t cc_call_stream(void* context, strmcb_t callback, void* userp) {
   if (!ctx || !callback) return ERROR_NULLPTR;
   if (!ctx->model) return ERROR_NULLPTR;
   if (ctx->snapshot) {
-    jdelete(ctx->snapshot);
+    msglist_delete(ctx->snapshot);
     ctx->snapshot = NULL;
   }
+  free(ctx->stream_turn_id);
+  ctx->stream_turn_id = NULL;
   ctx->finished = false;
 
   char url[URL_LEN];
@@ -492,6 +731,8 @@ err_t cc_update(void* context, const char* response, size_t len) {
   // agent does not re-execute the tool calls it already handled.
   if (openai_done_marker(response, len)) {
     pctx_clear_latest(ctx);
+    free(ctx->stream_turn_id);
+    ctx->stream_turn_id = NULL;
     return ERROR_NONE;
   }
   pctx_clear_latest(ctx);

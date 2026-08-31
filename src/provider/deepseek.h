@@ -3,7 +3,8 @@
 
 #include "provider/provider.h"
 
-err_t deepseek_update(void* context, const char* response, size_t len);
+err_t deepseek_create_context(void** context);
+err_t deepseek_deserialize(const char* data, size_t len, void** context);
 
 const provider_t* get_deepseek_provider();
 

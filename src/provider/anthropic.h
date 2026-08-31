@@ -3,6 +3,10 @@
 
 #include "provider/provider.h"
 
+// Convert the general conversation into the Anthropic Messages API "messages"
+// array (assistant turns grouped into content blocks, user/tool turns merged).
+jnode_t* anthropic_messages_to_json(const pctx_t* ctx, jnode_t* jarr);
+
 err_t anthropic_create_context(void** context);
 void anthropic_delete_context(void* context);
 err_t anthropic_serialize(void* context, char** data, size_t* len);

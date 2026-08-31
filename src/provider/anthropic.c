@@ -45,12 +45,123 @@ static jnode_t* anthropic_serialize_tool(const tool_t* tool) {
   return jtool;
 }
 
+// Convert the general message list into the Anthropic Messages API "messages"
+// array. An assistant turn (REASONING/ASSISTANT/TOOL_CALL sharing one id) is
+// grouped into a single assistant message with content blocks: thinking (only
+// when model->thinking is set), text, and tool_use blocks. A user turn
+// (USER/TOOL_RESULT) is grouped into a single user message so roles always
+// alternate.
+jnode_t* anthropic_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
+  jnode_t* jcur = NULL;       // message being built
+  bool cur_user = false;      // whether jcur is a user message
+  const char* cur_id = NULL;  // turn id of the current assistant message
+  for (size_t i = 0; i < ctx->messages->n_message; ++i) {
+    const message_t* m = &ctx->messages->messages[i];
+    switch (m->type) {
+      case SYSTEM:
+        // The system prompt is sent in the top-level "system" field.
+        break;
+      case USER: {
+        if (!jcur || !cur_user) {
+          jcur = jobject_new();
+          jobject_put(jcur, "role", jstring_new(0, "user"));
+          jobject_put(jcur, "content", jarray_new());
+          jarray_add(jarr, jcur);
+          cur_user = true;
+        }
+        jnode_t* jcontent = jobject_get(jcur, "content");
+        jnode_t* jblock = jobject_new();
+        jobject_put(jblock, "type", jstring_new(0, "text"));
+        jobject_put(jblock, "text",
+                    jstring_new(0, m->user.text ? m->user.text : ""));
+        jarray_add(jcontent, jblock);
+        break;
+      }
+      case TOOL_RESULT: {
+        if (!jcur || !cur_user) {
+          jcur = jobject_new();
+          jobject_put(jcur, "role", jstring_new(0, "user"));
+          jobject_put(jcur, "content", jarray_new());
+          jarray_add(jarr, jcur);
+          cur_user = true;
+        }
+        jnode_t* jcontent = jobject_get(jcur, "content");
+        jnode_t* jblock = jobject_new();
+        jobject_put(jblock, "type", jstring_new(0, "tool_result"));
+        jobject_put(
+            jblock, "tool_use_id",
+            jstring_new(0,
+                        m->tool_result.call_id ? m->tool_result.call_id : ""));
+        jobject_put(
+            jblock, "content",
+            jstring_new(0, m->tool_result.result ? m->tool_result.result : ""));
+        jarray_add(jcontent, jblock);
+        break;
+      }
+      case REASONING:
+      case ASSISTANT:
+      case TOOL_CALL: {
+        const char* mid = message_id(m);
+        bool join =
+            jcur && !cur_user && (!mid || !cur_id || strcmp(mid, cur_id) == 0);
+        if (!join) {
+          jcur = jobject_new();
+          jobject_put(jcur, "role", jstring_new(0, "assistant"));
+          jobject_put(jcur, "content", jarray_new());
+          jarray_add(jarr, jcur);
+          cur_user = false;
+          cur_id = mid;
+        }
+        jnode_t* jcontent = jobject_get(jcur, "content");
+        if (m->type == REASONING) {
+          if (ctx->model->thinking) {
+            jnode_t* jblock = jobject_new();
+            jobject_put(jblock, "type", jstring_new(0, "thinking"));
+            jobject_put(
+                jblock, "thinking",
+                jstring_new(0, m->reasoning.text ? m->reasoning.text : ""));
+            jarray_add(jcontent, jblock);
+          }
+        } else if (m->type == ASSISTANT) {
+          if (m->assistant.text && m->assistant.text_len) {
+            jnode_t* jblock = jobject_new();
+            jobject_put(jblock, "type", jstring_new(0, "text"));
+            jobject_put(jblock, "text", jstring_new(0, m->assistant.text));
+            jarray_add(jcontent, jblock);
+          }
+        } else {  // TOOL_CALL
+          jnode_t* jblock = jobject_new();
+          jobject_put(jblock, "type", jstring_new(0, "tool_use"));
+          jobject_put(
+              jblock, "id",
+              jstring_new(0, m->tool_call.call_id ? m->tool_call.call_id : ""));
+          jobject_put(
+              jblock, "name",
+              jstring_new(0, m->tool_call.name ? m->tool_call.name : ""));
+          // The general form stores args as a JSON string; the API wants an
+          // object.
+          jnode_t* jinput = NULL;
+          if (m->tool_call.args && m->tool_call.args_len) {
+            jinput =
+                jfrom_string(m->tool_call.args, (int)m->tool_call.args_len);
+          }
+          jobject_put(jblock, "input", jinput ? jinput : jobject_new());
+          jarray_add(jcontent, jblock);
+        }
+        break;
+      }
+    }
+  }
+  return jarr;
+}
+
 static jnode_t* anthropic_body(const pctx_t* ctx, bool stream) {
   jnode_t* jbody = jobject_new();
   jobject_put(jbody, "model", jstring_new(0, ctx->model->name));
   jobject_put(jbody, "system",
               jstring_new(0, ctx->system_prompt ? ctx->system_prompt : ""));
-  jobject_put(jbody, "messages", jcopy(ctx->messages));
+  // Convert the general conversation into the API-specific messages array.
+  jobject_put(jbody, "messages", anthropic_messages_to_json(ctx, jarray_new()));
 
   jnode_t* jtools = jarray_new();
   jobject_put(jbody, "tools", jtools);
@@ -135,58 +246,48 @@ static bool anthropic_done_marker(const char* data, size_t len) {
   return len == 6 && memcmp(data, "[DONE]", 6) == 0;
 }
 
-// Collect the tool_use blocks of `jcontent` into the latest tool calls. The
-// `input` object of each block is serialized to a JSON string.
-static err_t anthropic_build_tool_calls(pctx_t* ctx, jnode_t* jcontent) {
-  if (!jis_array(jcontent)) return ERROR_NONE;
-  size_t n = 0;
-  for (int i = 0; i < jarray_size(jcontent); ++i) {
-    jnode_t* jblock = jarray_get(jcontent, i);
-    jnode_t* jtype = jobject_get(jblock, "type");
-    if (jis_string(jtype) && strcmp(jstring_content(jtype), "tool_use") == 0) {
-      ++n;
-    }
-  }
-  if (n == 0) return ERROR_NONE;
+// Streaming helpers ---------------------------------------------------------
 
-  const char** ids = calloc(n, sizeof(char*));
-  const char** names = calloc(n, sizeof(char*));
-  const char** args = calloc(n, sizeof(char*));
-  if (!ids || !names || !args) {
-    free(ids);
-    free(names);
-    free(args);
-    return ERROR_OUT_OF_MEMORY;
+// Find the trailing message of `type` within the current stream turn.
+static message_t* anthropic_turn_find(pctx_t* ctx, msgtyp_t type) {
+  size_t n = ctx->messages->n_message;
+  const char* tid = ctx->stream_turn_id;
+  for (size_t i = n; i > 0; --i) {
+    message_t* m = &ctx->messages->messages[i - 1];
+    if (m->type != REASONING && m->type != ASSISTANT && m->type != TOOL_CALL)
+      return NULL;
+    const char* mid = message_id(m);
+    if (mid && tid && strcmp(mid, tid) != 0) return NULL;
+    if (m->type == type) return m;
   }
-  size_t k = 0;
-  for (int i = 0; i < jarray_size(jcontent) && k < n; ++i) {
-    jnode_t* jblock = jarray_get(jcontent, i);
-    jnode_t* jtype = jobject_get(jblock, "type");
-    if (!jis_string(jtype) || strcmp(jstring_content(jtype), "tool_use") != 0) {
-      continue;
-    }
-    jnode_t* jid = jobject_get(jblock, "id");
-    jnode_t* jname = jobject_get(jblock, "name");
-    jnode_t* jinput = jobject_get(jblock, "input");
-    ids[k] = jis_string(jid) ? jstring_content(jid) : NULL;
-    names[k] = jis_string(jname) ? jstring_content(jname) : NULL;
-    if (jis_string(jinput)) {
-      args[k] = strdup(jstring_content(jinput));
-    } else if (jinput) {
-      args[k] = jto_string(jinput);
-    }
-    ++k;
-  }
-  err_t err = pctx_set_tool_calls(ctx, k, ids, names, args);
-  for (size_t i = 0; i < k; ++i) free((char*)args[i]);
-  free(ids);
-  free(names);
-  free(args);
-  return err;
+  return NULL;
 }
 
-// Non-streaming response: append the assistant message and expose the latest
-// state.
+// Find the message for content-block `index` within the current stream turn.
+// Content blocks map 1:1 to the trailing-turn messages (in block order), so
+// block index == position within the turn. Only tool_use blocks get
+// input_json_delta fragments.
+static message_t* anthropic_turn_message_at(pctx_t* ctx, int index) {
+  if (index < 0) return NULL;
+  size_t n = ctx->messages->n_message;
+  const char* tid = ctx->stream_turn_id;
+  size_t start = n;
+  for (size_t i = n; i > 0; --i) {
+    message_t* m = &ctx->messages->messages[i - 1];
+    if (m->type != REASONING && m->type != ASSISTANT && m->type != TOOL_CALL)
+      break;
+    const char* mid = message_id(m);
+    if (mid && tid && strcmp(mid, tid) != 0) break;
+    start = i - 1;
+  }
+  if ((size_t)index >= n - start) return NULL;
+  message_t* m = &ctx->messages->messages[start + index];
+  return m->type == TOOL_CALL ? m : NULL;
+}
+
+// Non-streaming response: convert the content blocks into general
+// REASONING/ASSISTANT/TOOL_CALL messages (all sharing the response message id)
+// and expose the latest state.
 static err_t anthropic_update_full(pctx_t* ctx, jnode_t* json) {
   jnode_t* jstop = jobject_get(json, "stop_reason");
   const char* stop = jis_string(jstop) ? jstring_content(jstop) : NULL;
@@ -197,70 +298,174 @@ static err_t anthropic_update_full(pctx_t* ctx, jnode_t* json) {
     if (strcmp(stop, "tool_use") == 0) ctx->tool_calls_ready = true;
   }
 
+  jnode_t* jid = jobject_get(json, "id");
+  const char* id = jis_string(jid) ? jstring_content(jid) : NULL;
+  char* turn_id = id ? strdup(id) : pctx_new_turn_id();
+  if (!turn_id) return ERROR_OUT_OF_MEMORY;
+
   jnode_t* jcontent = jobject_get(json, "content");
   if (jis_string(jcontent)) {
     if (jstring_len(jcontent)) {
+      message_t* m = message_new(ASSISTANT);
+      if (!m) {
+        free(turn_id);
+        return ERROR_OUT_OF_MEMORY;
+      }
+      if (message_set_id(m, turn_id) != ERROR_NONE) {
+        message_delete(m);
+        free(turn_id);
+        return ERROR_OUT_OF_MEMORY;
+      }
+      m->assistant.text = strdup(jstring_content(jcontent));
+      if (!m->assistant.text) {
+        message_delete(m);
+        free(turn_id);
+        return ERROR_OUT_OF_MEMORY;
+      }
+      m->assistant.text_len = strlen(m->assistant.text);
+      msglist_add_message(ctx->messages, m);
       ctx->latest_content = strdup(jstring_content(jcontent));
     }
+    free(turn_id);
     return ERROR_NONE;
   }
-  if (!jis_array(jcontent)) return ERROR_NONE;
+  if (!jis_array(jcontent)) {
+    free(turn_id);
+    return ERROR_NONE;
+  }
 
-  // Append the assistant message (content blocks) to the conversation.
-  jnode_t* jmessage = jobject_new();
-  jobject_put(jmessage, "role", jstring_new(0, "assistant"));
-  jobject_put(jmessage, "content", jcopy(jcontent));
-  jarray_add(ctx->messages, jmessage);
-
-  // Concatenate text blocks into latest_content and thinking into
-  // latest_reasoning.
+  // Collect text/thinking and the tool_use blocks.
   jnode_t* jtext = jstring_new(0, "");
   jnode_t* jthinking = jstring_new(0, "");
   size_t n = jarray_size(jcontent);
+  size_t n_tool = 0;
+  for (size_t i = 0; i < n; ++i) {
+    jnode_t* jblock = jarray_get(jcontent, i);
+    jnode_t* jtype = jobject_get(jblock, "type");
+    const char* type = jis_string(jtype) ? jstring_content(jtype) : NULL;
+    if (type && strcmp(type, "tool_use") == 0) ++n_tool;
+  }
   for (size_t i = 0; i < n; ++i) {
     jnode_t* jblock = jarray_get(jcontent, i);
     jnode_t* jtype = jobject_get(jblock, "type");
     const char* type = jis_string(jtype) ? jstring_content(jtype) : NULL;
     if (type && strcmp(type, "text") == 0) {
-      jnode_t* jblock_text = jobject_get(jblock, "text");
-      if (jis_string(jblock_text)) {
-        jstring_concat(jtext, jstring_content(jblock_text));
-      }
+      jnode_t* jt = jobject_get(jblock, "text");
+      if (jis_string(jt)) jstring_concat(jtext, jstring_content(jt));
     } else if (type && strcmp(type, "thinking") == 0) {
-      jnode_t* jblock_thinking = jobject_get(jblock, "thinking");
-      if (jis_string(jblock_thinking)) {
-        jstring_concat(jthinking, jstring_content(jblock_thinking));
+      jnode_t* jt = jobject_get(jblock, "thinking");
+      if (jis_string(jt)) jstring_concat(jthinking, jstring_content(jt));
+    }
+  }
+
+  // Append REASONING, then ASSISTANT, then TOOL_CALL messages in turn order.
+  if (jstring_len(jthinking)) {
+    message_t* m = message_new(REASONING);
+    if (m) {
+      m->reasoning.text = strdup(jstring_content(jthinking));
+      if (m->reasoning.text && message_set_id(m, turn_id) == ERROR_NONE) {
+        m->reasoning.text_len = strlen(m->reasoning.text);
+        msglist_add_message(ctx->messages, m);
+        ctx->latest_reasoning = strdup(jstring_content(jthinking));
+      } else {
+        message_delete(m);
       }
     }
   }
-  if (jstring_len(jtext)) ctx->latest_content = strdup(jstring_content(jtext));
-  if (jstring_len(jthinking)) {
-    ctx->latest_reasoning = strdup(jstring_content(jthinking));
+  if (jstring_len(jtext)) {
+    message_t* m = message_new(ASSISTANT);
+    if (m) {
+      m->assistant.text = strdup(jstring_content(jtext));
+      if (m->assistant.text && message_set_id(m, turn_id) == ERROR_NONE) {
+        m->assistant.text_len = strlen(m->assistant.text);
+        msglist_add_message(ctx->messages, m);
+        ctx->latest_content = strdup(jstring_content(jtext));
+      } else {
+        message_delete(m);
+      }
+    }
+  }
+  for (size_t i = 0; i < n && n_tool > 0; ++i) {
+    jnode_t* jblock = jarray_get(jcontent, i);
+    jnode_t* jtype = jobject_get(jblock, "type");
+    const char* type = jis_string(jtype) ? jstring_content(jtype) : NULL;
+    if (!type || strcmp(type, "tool_use") != 0) continue;
+    jnode_t* jcall_id = jobject_get(jblock, "id");
+    jnode_t* jname = jobject_get(jblock, "name");
+    jnode_t* jinput = jobject_get(jblock, "input");
+    char* args = NULL;
+    if (jis_string(jinput)) {
+      args = strdup(jstring_content(jinput));
+    } else if (jinput) {
+      args = jto_string(jinput);
+    }
+    message_t* m = message_new(TOOL_CALL);
+    if (!m) {
+      free(args);
+      break;
+    }
+    if (message_set_id(m, turn_id) != ERROR_NONE) {
+      message_delete(m);
+      free(args);
+      break;
+    }
+    if (jis_string(jcall_id)) {
+      m->tool_call.call_id = strdup(jstring_content(jcall_id));
+      m->tool_call.call_id_len =
+          m->tool_call.call_id ? strlen(m->tool_call.call_id) : 0;
+    }
+    if (jis_string(jname)) {
+      m->tool_call.name = strdup(jstring_content(jname));
+      m->tool_call.name_len = m->tool_call.name ? strlen(m->tool_call.name) : 0;
+    }
+    if (args) {
+      m->tool_call.args = args;
+      m->tool_call.args_len = strlen(args);
+    }
+    msglist_add_message(ctx->messages, m);
   }
   jdelete(jtext);
   jdelete(jthinking);
 
   if (ctx->tool_calls_ready) {
-    err_t err = anthropic_build_tool_calls(ctx, jcontent);
-    if (err != ERROR_NONE) return err;
+    err_t err = pctx_latest_calls_from_turn(ctx);
+    if (err != ERROR_NONE) {
+      free(turn_id);
+      return err;
+    }
   }
+  free(turn_id);
   return ERROR_NONE;
 }
 
-// Streaming event: merge the delta into the assistant message being built.
+// Streaming event: merge the delta into the general assistant turn being
+// built. Content blocks map 1:1 to general messages (REASONING for thinking,
+// ASSISTANT for text, TOOL_CALL for tool_use).
 static err_t anthropic_update_stream(pctx_t* ctx, jnode_t* json) {
   jnode_t* jtype = jobject_get(json, "type");
   if (!jis_string(jtype)) return ERROR_NONE;
   const char* type = jstring_content(jtype);
 
   if (strcmp(type, "message_start") == 0) {
-    jnode_t* jmessage = jobject_new();
-    jobject_put(jmessage, "role", jstring_new(0, "assistant"));
-    jobject_put(jmessage, "content", jarray_new());
-    jarray_add(ctx->messages, jmessage);
+    // Record the API message id so later content blocks are grouped into one
+    // assistant turn. No placeholder message is created.
+    jnode_t* jmessage = jobject_get(json, "message");
+    jnode_t* jid = jmessage ? jobject_get(jmessage, "id") : NULL;
+    free(ctx->stream_turn_id);
+    ctx->stream_turn_id =
+        jis_string(jid) ? strdup(jstring_content(jid)) : pctx_new_turn_id();
     return ERROR_NONE;
   }
-  if (strcmp(type, "message_stop") == 0 || strcmp(type, "ping") == 0) {
+  if (strcmp(type, "message_stop") == 0) {
+    // End of the assistant message; the turn is complete.
+    free(ctx->stream_turn_id);
+    ctx->stream_turn_id = NULL;
+    return ERROR_NONE;
+  }
+  if (strcmp(type, "ping") == 0) {
+    // Heartbeat: may arrive at any point mid-turn. It must NOT clear the
+    // stream turn id, or later content blocks would get a fresh id and the
+    // turn (and its tool_use input accumulation) would break.
     return ERROR_NONE;
   }
   if (strcmp(type, "error") == 0) {
@@ -284,54 +489,59 @@ static err_t anthropic_update_stream(pctx_t* ctx, jnode_t* json) {
       ctx->finished = (strcmp(stop, "tool_use") != 0);
       if (strcmp(stop, "tool_use") == 0) {
         ctx->tool_calls_ready = true;
-        if (jarray_size(ctx->messages) > 0) {
-          jnode_t* jlast =
-              jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
-          err_t err =
-              anthropic_build_tool_calls(ctx, jobject_get(jlast, "content"));
-          if (err != ERROR_NONE) return err;
-        }
+        err_t err = pctx_latest_calls_from_turn(ctx);
+        if (err != ERROR_NONE) return err;
       }
     }
     return ERROR_NONE;
   }
-
-  // content_block_* events address a block inside the last assistant message.
-  if (jarray_size(ctx->messages) == 0) return ERROR_NONE;
-  jnode_t* jlast = jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
-  jnode_t* jcontent = jobject_get(jlast, "content");
-  if (!jis_array(jcontent)) return ERROR_NONE;
-
-  jnode_t* jindex_node = jobject_get(json, "index");
-  int index =
-      jis_number(jindex_node) ? (int)jas_number(jindex_node)->value : -1;
 
   if (strcmp(type, "content_block_start") == 0) {
     jnode_t* jcb = jobject_get(json, "content_block");
     if (!jis_object(jcb)) return ERROR_NONE;
-    jnode_t* jblock = jcopy(jcb);
-    // tool_use input arrives as input_json_delta fragments; accumulate them
-    // as a string until the block is complete.
-    jnode_t* jblock_type = jobject_get(jblock, "type");
-    if (jis_string(jblock_type) &&
-        strcmp(jstring_content(jblock_type), "tool_use") == 0) {
-      jobject_put(jblock, "input", jstring_new(0, ""));
+    // Some proxies omit message_start; fall back to a generated turn id.
+    if (!ctx->stream_turn_id) {
+      ctx->stream_turn_id = pctx_new_turn_id();
+      if (!ctx->stream_turn_id) return ERROR_OUT_OF_MEMORY;
     }
-    if (index < 0 || index >= jarray_size(jcontent)) {
-      jarray_add(jcontent, jblock);
-    } else {
-      jarray_remove(jcontent, index);
-      if (index >= jarray_size(jcontent)) {
-        jarray_add(jcontent, jblock);
-      } else {
-        jarray_insert(jcontent, index, jblock);
+    jnode_t* jcb_type = jobject_get(jcb, "type");
+    const char* cbtype =
+        jis_string(jcb_type) ? jstring_content(jcb_type) : NULL;
+    if (!cbtype) return ERROR_NONE;
+    message_t* m = NULL;
+    if (strcmp(cbtype, "thinking") == 0) {
+      m = message_new(REASONING);
+    } else if (strcmp(cbtype, "text") == 0) {
+      m = message_new(ASSISTANT);
+    } else if (strcmp(cbtype, "tool_use") == 0) {
+      m = message_new(TOOL_CALL);
+      if (m) {
+        jnode_t* jid = jobject_get(jcb, "id");
+        jnode_t* jname = jobject_get(jcb, "name");
+        if (jis_string(jid)) {
+          m->tool_call.call_id = strdup(jstring_content(jid));
+          m->tool_call.call_id_len =
+              m->tool_call.call_id ? strlen(m->tool_call.call_id) : 0;
+        }
+        if (jis_string(jname)) {
+          m->tool_call.name = strdup(jstring_content(jname));
+          m->tool_call.name_len =
+              m->tool_call.name ? strlen(m->tool_call.name) : 0;
+        }
+        // args accumulate via input_json_delta fragments.
       }
+    } else {
+      // Unknown block type: nothing to store.
+      return ERROR_NONE;
     }
+    if (!m) return ERROR_OUT_OF_MEMORY;
+    if (message_set_id(m, ctx->stream_turn_id) != ERROR_NONE) {
+      message_delete(m);
+      return ERROR_OUT_OF_MEMORY;
+    }
+    msglist_add_message(ctx->messages, m);
     return ERROR_NONE;
   }
-
-  if (index < 0 || index >= jarray_size(jcontent)) return ERROR_NONE;
-  jnode_t* jblock = jarray_get(jcontent, index);
 
   if (strcmp(type, "content_block_delta") == 0) {
     jnode_t* jdelta = jobject_get(json, "delta");
@@ -341,51 +551,40 @@ static err_t anthropic_update_stream(pctx_t* ctx, jnode_t* json) {
     if (strcmp(delta_type, "text_delta") == 0) {
       jnode_t* jtext = jobject_get(jdelta, "text");
       if (!jis_string(jtext)) return ERROR_NONE;
+      message_t* asst = anthropic_turn_find(ctx, ASSISTANT);
+      if (asst) {
+        pctx_append_text(&asst->assistant.text, &asst->assistant.text_len,
+                         jstring_content(jtext));
+      }
       free(ctx->latest_content);
       ctx->latest_content = strdup(jstring_content(jtext));
-      jnode_t* jblock_text = jobject_get(jblock, "text");
-      if (!jis_string(jblock_text)) {
-        jobject_put(jblock, "text", jcopy(jtext));
-      } else {
-        jstring_concat(jblock_text, jstring_content(jtext));
-      }
     } else if (strcmp(delta_type, "thinking_delta") == 0) {
       jnode_t* jthinking = jobject_get(jdelta, "thinking");
       if (!jis_string(jthinking)) return ERROR_NONE;
+      message_t* reas = anthropic_turn_find(ctx, REASONING);
+      if (reas) {
+        pctx_append_text(&reas->reasoning.text, &reas->reasoning.text_len,
+                         jstring_content(jthinking));
+      }
       free(ctx->latest_reasoning);
       ctx->latest_reasoning = strdup(jstring_content(jthinking));
-      jnode_t* jblock_thinking = jobject_get(jblock, "thinking");
-      if (!jis_string(jblock_thinking)) {
-        jobject_put(jblock, "thinking", jcopy(jthinking));
-      } else {
-        jstring_concat(jblock_thinking, jstring_content(jthinking));
-      }
     } else if (strcmp(delta_type, "input_json_delta") == 0) {
       jnode_t* jpartial = jobject_get(jdelta, "partial_json");
       if (!jis_string(jpartial)) return ERROR_NONE;
-      jnode_t* jinput = jobject_get(jblock, "input");
-      if (!jis_string(jinput)) {
-        jobject_put(jblock, "input", jcopy(jpartial));
-      } else {
-        jstring_concat(jinput, jstring_content(jpartial));
+      jnode_t* jindex_node = jobject_get(json, "index");
+      int index =
+          jis_number(jindex_node) ? (int)jas_number(jindex_node)->value : -1;
+      message_t* tc = anthropic_turn_message_at(ctx, index);
+      if (tc) {
+        pctx_append_text(&tc->tool_call.args, &tc->tool_call.args_len,
+                         jstring_content(jpartial));
       }
     }
     return ERROR_NONE;
   }
 
   if (strcmp(type, "content_block_stop") == 0) {
-    // The accumulated tool_use input string is now complete JSON; turn it
-    // into a real object so it can be sent back to the API.
-    jnode_t* jblock_type = jobject_get(jblock, "type");
-    if (!jis_string(jblock_type) ||
-        strcmp(jstring_content(jblock_type), "tool_use") != 0) {
-      return ERROR_NONE;
-    }
-    jnode_t* jinput = jobject_get(jblock, "input");
-    if (jis_string(jinput)) {
-      jnode_t* jparsed = jfrom_string(jstring_content(jinput), 0);
-      jobject_put(jblock, "input", jparsed ? jparsed : jobject_new());
-    }
+    // The general form keeps tool_use input as a JSON string; nothing to do.
     return ERROR_NONE;
   }
 
@@ -457,94 +656,22 @@ const char* anthropic_get_system_prompt(void* context) {
 }
 
 size_t anthropic_message_count(void* context) {
-  pctx_t* ctx = context;
-  return ctx ? (size_t)jarray_size(ctx->messages) : 0;
+  return pctx_message_count((const pctx_t*)context);
 }
 
-// Anthropic requires user/assistant roles to alternate, so consecutive user
-// messages are merged.
+// Messages are stored in the general form; role alternation and user/tool
+// merging happen in the request builder (anthropic_messages_to_json).
 err_t anthropic_add_user_message(void* context, const char* message) {
-  pctx_t* ctx = context;
-  if (!ctx || !message) return ERROR_NULLPTR;
-
-  if (jarray_size(ctx->messages) > 0) {
-    jnode_t* jlast = jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
-    jnode_t* jrole = jobject_get(jlast, "role");
-    if (jis_string(jrole) && strcmp(jstring_content(jrole), "user") == 0) {
-      jnode_t* jcontent = jobject_get(jlast, "content");
-      if (jis_string(jcontent)) {
-        jstring_concat(jcontent, message);
-        return ERROR_NONE;
-      }
-      if (jis_array(jcontent)) {
-        jnode_t* jblock = jobject_new();
-        jobject_put(jblock, "type", jstring_new(0, "text"));
-        jobject_put(jblock, "text", jstring_new(0, message));
-        jarray_add(jcontent, jblock);
-        return ERROR_NONE;
-      }
-    }
-  }
-
-  jnode_t* jmessage = jobject_new();
-  jobject_put(jmessage, "role", jstring_new(0, "user"));
-  jobject_put(jmessage, "content", jstring_new(0, message));
-  jarray_add(ctx->messages, jmessage);
-  return ERROR_NONE;
+  return pctx_add_user_message((pctx_t*)context, message);
 }
 
 err_t anthropic_add_assistant_message(void* context, const char* message) {
-  pctx_t* ctx = context;
-  if (!ctx || !message) return ERROR_NULLPTR;
-  jnode_t* jmessage = jobject_new();
-  jobject_put(jmessage, "role", jstring_new(0, "assistant"));
-  jobject_put(jmessage, "content", jstring_new(0, message));
-  jarray_add(ctx->messages, jmessage);
-  return ERROR_NONE;
+  return pctx_add_assistant_message((pctx_t*)context, message);
 }
 
 err_t anthropic_add_tool_message(void* context, const char* id,
                                  const char* tool_name, const char* result) {
-  (void)tool_name;
-  pctx_t* ctx = context;
-  if (!ctx || !id || !result) return ERROR_NULLPTR;
-
-  jnode_t* jtool_result = jobject_new();
-  jobject_put(jtool_result, "type", jstring_new(0, "tool_result"));
-  jobject_put(jtool_result, "tool_use_id", jstring_new(0, id));
-  jobject_put(jtool_result, "content", jstring_new(0, result));
-
-  // All tool_results for one assistant turn belong in a single user message
-  // that directly follows it. Reuse the last message if it is already a user
-  // message (e.g. a previous tool_result).
-  if (jarray_size(ctx->messages) > 0) {
-    jnode_t* jlast = jarray_get(ctx->messages, jarray_size(ctx->messages) - 1);
-    jnode_t* jrole = jobject_get(jlast, "role");
-    if (jis_string(jrole) && strcmp(jstring_content(jrole), "user") == 0) {
-      jnode_t* jcontent = jobject_get(jlast, "content");
-      if (jis_string(jcontent)) {
-        // Convert the plain string content into a block array so a
-        // tool_result can be appended. jobject_put below deletes the old
-        // string value, so the array must hold its own copy.
-        jnode_t* jarr = jarray_new();
-        jarray_add(jarr, jstring_new(0, jstring_content(jcontent)));
-        jobject_put(jlast, "content", jarr);
-        jcontent = jarr;
-      }
-      if (jis_array(jcontent)) {
-        jarray_add(jcontent, jtool_result);
-        return ERROR_NONE;
-      }
-    }
-  }
-
-  jnode_t* jmessage = jobject_new();
-  jobject_put(jmessage, "role", jstring_new(0, "user"));
-  jnode_t* jcontent = jarray_new();
-  jobject_put(jmessage, "content", jcontent);
-  jarray_add(jcontent, jtool_result);
-  jarray_add(ctx->messages, jmessage);
-  return ERROR_NONE;
+  return pctx_add_tool_message((pctx_t*)context, id, tool_name, result);
 }
 
 void anthropic_clear_messages(void* context) {
@@ -561,17 +688,21 @@ err_t anthropic_call(void* context, char** response, size_t* len) {
   if (!ctx->model) return ERROR_NULLPTR;
   *response = NULL;
   *len = 0;
+  // A new turn starts; drop the previous snapshot, stream id and finished
+  // state.
   if (ctx->snapshot) {
-    jdelete(ctx->snapshot);
+    msglist_delete(ctx->snapshot);
     ctx->snapshot = NULL;
   }
+  free(ctx->stream_turn_id);
+  ctx->stream_turn_id = NULL;
   ctx->finished = false;
 
   response_t resp = {0};
   err_t err = anthropic_http_call(ctx, false, &resp);
   if (err != ERROR_NONE) return err;
   *response = (char*)resp.data;  // owned by the caller now
-  *len = resp.data_size;
+  *len = resp.data_len;
   return ERROR_NONE;
 }
 
@@ -591,9 +722,11 @@ err_t anthropic_call_stream(void* context, strmcb_t callback, void* userp) {
   if (!ctx || !callback) return ERROR_NULLPTR;
   if (!ctx->model) return ERROR_NULLPTR;
   if (ctx->snapshot) {
-    jdelete(ctx->snapshot);
+    msglist_delete(ctx->snapshot);
     ctx->snapshot = NULL;
   }
+  free(ctx->stream_turn_id);
+  ctx->stream_turn_id = NULL;
   ctx->finished = false;
 
   char url[URL_LEN];
@@ -631,6 +764,8 @@ err_t anthropic_update(void* context, const char* response, size_t len) {
   if (!ctx || !response) return ERROR_NULLPTR;
   if (anthropic_done_marker(response, len)) {
     pctx_clear_latest(ctx);
+    free(ctx->stream_turn_id);
+    ctx->stream_turn_id = NULL;
     return ERROR_NONE;
   }
   pctx_clear_latest(ctx);

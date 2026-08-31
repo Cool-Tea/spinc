@@ -5,7 +5,7 @@
 #include "agent.h"
 
 struct sse_context {
-  enum { START, REASONING, CONTENT, TOOL_CALL } line_type;
+  enum { SSE_START, SSE_REASONING, SSE_CONTENT, SSE_TOOL_CALL } line_type;
   bool* running;
   agent_t* agent;
 };
@@ -13,8 +13,6 @@ struct sse_context {
 err_t agent_new(const provider_t* provider, const model_t* model,
                 const char* system_prompt, const toolset_t* toolset,
                 agent_t** agent) {
-  log(INFO, "Creating agent for model %s from provider %s", model->name,
-      provider->name());
   *agent = malloc(sizeof(agent_t));
   if (!*agent) return ERROR_OUT_OF_MEMORY;
   agent_t* ag = *agent;
@@ -106,7 +104,7 @@ err_t agent_run(agent_t* agent, const char* user_input) {
       const toolset_t* toolset = provider->get_toolset(agent->ctx);
       for (size_t i = 0; i < n_call; ++i) {
         toolcall_t* call = &calls[i];
-        const char* id = call->id;
+        const char* id = call->call_id;
         const char* name = call->name;
         const char* args = call->args;
         const tool_t* tool = NULL;
@@ -182,19 +180,20 @@ static err_t sse_callback(void* context, const event_t* event, void* userp) {
 
   const char* reasoning = provider->latest_reasoning(context);
   if (reasoning) {
-    if (ctx->line_type != REASONING) {
-      if (ctx->line_type != START) printf("\n");
+    if (ctx->line_type != SSE_REASONING) {
+      if (ctx->line_type != SSE_START) printf("\n");
       printf("\033[2m[Reasoning] \033[0m");
     }
-    ctx->line_type = REASONING;
+    ctx->line_type = SSE_REASONING;
     printf("\033[2m%s\033[0m", reasoning);
     fflush(stdout);
   }
 
   const char* content = provider->latest_content(context);
   if (content) {
-    if (ctx->line_type != START && ctx->line_type != CONTENT) printf("\n");
-    ctx->line_type = CONTENT;
+    if (ctx->line_type != SSE_START && ctx->line_type != SSE_CONTENT)
+      printf("\n");
+    ctx->line_type = SSE_CONTENT;
     printf("\033[1m%s\033[0m", content);
     fflush(stdout);
   }
@@ -210,7 +209,7 @@ static err_t sse_callback(void* context, const event_t* event, void* userp) {
     const toolset_t* toolset = provider->get_toolset(context);
     for (size_t i = 0; i < n_call; ++i) {
       toolcall_t* call = &calls[i];
-      const char* id = call->id;
+      const char* id = call->call_id;
       const char* name = call->name;
       const char* args = call->args;
       const tool_t* tool = NULL;
@@ -225,9 +224,9 @@ static err_t sse_callback(void* context, const event_t* event, void* userp) {
           break;
         }
       } else {
-        if (ctx->line_type != START) printf("\n");
+        if (ctx->line_type != SSE_START) printf("\n");
         printf("\033[2m[Tool Call] %s\033[0m", name);
-        ctx->line_type = TOOL_CALL;
+        ctx->line_type = SSE_TOOL_CALL;
         size_t result_len = 0;
         char* result = NULL;
         err = tool->func(args, call->args_len, &result, &result_len);
@@ -269,7 +268,7 @@ err_t agent_run_stream(agent_t* agent, const char* user_input) {
   bool running = true;
   err_t err = ERROR_NONE;
   struct sse_context ctx = {
-      .line_type = START, .running = &running, .agent = agent};
+      .line_type = SSE_START, .running = &running, .agent = agent};
   while (running) {
     err = provider->call_stream(agent->ctx, sse_callback, &ctx);
     if (err != ERROR_NONE) {

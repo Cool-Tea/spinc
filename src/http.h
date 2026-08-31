@@ -9,13 +9,13 @@ typedef struct request {
   const char* url;
   size_t n_header;
   const char** headers;
-  size_t body_size;
+  size_t body_len;
   const char* body;
 } request_t;
 
 typedef struct response {
   long status;
-  size_t data_size;
+  size_t data_len;
   unsigned char* data;
 } response_t;
 

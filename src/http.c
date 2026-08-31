@@ -33,15 +33,15 @@ static size_t http_write_callback(void* contents, size_t size, size_t nmemb,
   size_t real_size = size * nmemb;
   response_t* resp = (response_t*)userp;
 
-  unsigned char* ptr = realloc(resp->data, resp->data_size + real_size + 1);
+  unsigned char* ptr = realloc(resp->data, resp->data_len + real_size + 1);
   if (!ptr) {
     return 0;  // Out of memory
   }
 
   resp->data = ptr;
-  memcpy(&(resp->data[resp->data_size]), contents, real_size);
-  resp->data_size += real_size;
-  resp->data[resp->data_size] = '\0';
+  memcpy(&(resp->data[resp->data_len]), contents, real_size);
+  resp->data_len += real_size;
+  resp->data[resp->data_len] = '\0';
 
   return real_size;
 }

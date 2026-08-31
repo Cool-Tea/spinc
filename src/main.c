@@ -64,6 +64,7 @@ static char** command_completion(const char* text, int start, int end) {
 }
 
 static err_t readline_init() {
+  log(INFO, "Initializing readline");
   rl_attempted_completion_function = command_completion;
   return ERROR_NONE;
 }
@@ -94,8 +95,9 @@ static err_t toolset_init(const char** tools, size_t n_tool) {
 }
 
 static err_t agent_init() {
-  log(INFO, "Initializing agent with model: %s", model.name);
   const provider_t* provider = get_provider(provider_type);
+  log(INFO, "Initializing agent with model %s from provider %s", model.name,
+      provider->name());
   err_t err =
       agent_new(provider, &model, system_prompt, enabled_toolset, &agent);
   if (err != ERROR_NONE) {
