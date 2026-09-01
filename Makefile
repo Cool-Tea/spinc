@@ -22,10 +22,10 @@ release: $(TARGET)
 debug: $(DEBUG_TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) -o $@ $^ $(LDFLAGS) 
 
 $(DEBUG_TARGET): $(DEBUG_OBJS)
-	$(CC) $(DEBUG_LDFLAGS) -o $@ $^
+	$(CC) -o $@ $^ $(DEBUG_LDFLAGS)
 
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
