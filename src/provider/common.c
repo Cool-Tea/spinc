@@ -99,13 +99,64 @@ void pctx_take_snapshot(pctx_t* ctx) {
   msglist_copy(ctx->messages, &ctx->snapshot);
 }
 
-void pctx_rewind(pctx_t* ctx) {
+size_t pctx_turn_count(const pctx_t* ctx) {
+  if (!ctx || !ctx->messages) return 0;
+  size_t count = 0;
+  for (size_t i = 0; i < ctx->messages->n_message; ++i) {
+    if (ctx->messages->messages[i].type == USER) ++count;
+  }
+  return count;
+}
+
+err_t pctx_get_turn_description(const pctx_t* ctx, size_t index,
+                                char** description, size_t* len) {
+  if (!ctx || !description || !len) return ERROR_NULLPTR;
+  *description = NULL;
+  *len = 0;
+
+  size_t turn = 0;
+  for (size_t i = 0; i < ctx->messages->n_message; ++i) {
+    if (ctx->messages->messages[i].type != USER) continue;
+    if (turn == index) {
+      const char* text = ctx->messages->messages[i].user.text;
+      if (!text) return ERROR_NONE;
+      char* copy = strdup(text);
+      if (!copy) return ERROR_OUT_OF_MEMORY;
+      *description = copy;
+      *len = strlen(copy);
+      return ERROR_NONE;
+    }
+    ++turn;
+  }
+
+  return ERROR_OUT_OF_BOUNDS;
+}
+
+void pctx_rewind(pctx_t* ctx, size_t turn_index) {
   if (!ctx) return;
   if (ctx->snapshot) {
     msglist_delete(ctx->messages);
     ctx->messages = ctx->snapshot;
     ctx->snapshot = NULL;
   }
+
+  size_t turns = pctx_turn_count(ctx);
+  if (turn_index > turns) turn_index = turns;
+
+  size_t keep = 0;
+  size_t current_turn = 0;
+  for (size_t i = 0; i < ctx->messages->n_message; ++i) {
+    if (ctx->messages->messages[i].type == USER) {
+      if (current_turn >= turn_index) break;
+      ++current_turn;
+    }
+    keep = i + 1;
+  }
+
+  while (ctx->messages && ctx->messages->n_message > keep) {
+    msglist_pop_message_delete(ctx->messages);
+  }
+
   free(ctx->stream_turn_id);
   ctx->stream_turn_id = NULL;
   pctx_clear_latest(ctx);

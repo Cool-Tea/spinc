@@ -607,6 +607,16 @@ size_t cc_message_count(const void* context) {
   return pctx_message_count((const pctx_t*)context);
 }
 
+size_t cc_turn_count(const void* context) {
+  return pctx_turn_count((const pctx_t*)context);
+}
+
+err_t cc_get_turn_description(const void* context, size_t index,
+                              char** description, size_t* len) {
+  return pctx_get_turn_description((const pctx_t*)context, index, description,
+                                   len);
+}
+
 err_t cc_add_user_message(void* context, const char* message) {
   return pctx_add_user_message((pctx_t*)context, message);
 }
@@ -738,7 +748,9 @@ err_t cc_update(void* context, const char* response, size_t len) {
   return err;
 }
 
-void cc_rewind(void* context) { pctx_rewind((pctx_t*)context); }
+void cc_rewind(void* context, size_t turn_index) {
+  pctx_rewind((pctx_t*)context, turn_index);
+}
 
 bool cc_is_finished(const void* context) {
   const pctx_t* ctx = context;
@@ -792,6 +804,8 @@ static const provider_t openai_provider = {
     .set_system_prompt = cc_set_system_prompt,
     .get_system_prompt = cc_get_system_prompt,
     .message_count = cc_message_count,
+    .turn_count = cc_turn_count,
+    .get_turn_description = cc_get_turn_description,
     .add_user_message = cc_add_user_message,
     .add_assistant_message = cc_add_assistant_message,
     .add_tool_message = cc_add_tool_message,

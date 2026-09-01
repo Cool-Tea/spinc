@@ -208,6 +208,25 @@ err_t session_run_stream(const char* user_input) {
   return agent_run_stream(current.agent, user_input);
 }
 
+size_t session_turn_count() {
+  const provider_t* provider = current.agent->provider;
+  const void* context = current.agent->ctx;
+  return provider->turn_count(context);
+}
+
+err_t session_turn_description(size_t index, char** description, size_t* len) {
+  const provider_t* provider = current.agent->provider;
+  const void* context = current.agent->ctx;
+  return provider->get_turn_description(context, index, description, len);
+}
+
+err_t session_rewind(size_t turn_index) {
+  const provider_t* provider = current.agent->provider;
+  void* context = current.agent->ctx;
+  provider->rewind(context, turn_index);
+  return ERROR_NONE;
+}
+
 FILE* session_log_file() { return current.logf ? current.logf : stderr; }
 
 int session_log_level() { return current.log_level; }

@@ -52,8 +52,14 @@ void pctx_clear_latest(pctx_t* ctx);
 // Snapshot the conversation for rewind(); a no-op if a snapshot already
 // exists (e.g. mid-stream).
 void pctx_take_snapshot(pctx_t* ctx);
-// Restore the snapshot (if any) and clear the latest state.
-void pctx_rewind(pctx_t* ctx);
+// Restore the context to the given conversation-turn boundary. A turn starts
+// with the user message passed to session_run(_stream) and ends before the next
+// user turn. turn_index is the number of complete turns to keep.
+void pctx_rewind(pctx_t* ctx, size_t turn_index);
+size_t pctx_turn_count(const pctx_t* ctx);
+// Return a heap copy of the first user message for the given turn index.
+err_t pctx_get_turn_description(const pctx_t* ctx, size_t index,
+                                char** description, size_t* len);
 
 // Generate a fresh assistant-turn id (owned by the caller).
 char* pctx_new_turn_id(void);

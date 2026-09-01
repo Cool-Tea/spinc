@@ -7,6 +7,8 @@ static const command_t cmds[] = {
     DEFINE_COMMAND("help", "Show this help message", help_command),
     DEFINE_COMMAND("exit", "Exit the program", exit_command),
     DEFINE_COMMAND("quit", "Exit the program", exit_command),
+    DEFINE_COMMAND("history", "Show the conversation history", history_command),
+    DEFINE_COMMAND("rewind", "Rewind the conversation", rewind_command),
 };
 static size_t n_cmd = sizeof(cmds) / sizeof(command_t);
 

@@ -18,6 +18,9 @@ toolset_t* anthropic_get_toolset(void* context);
 err_t anthropic_set_system_prompt(void* context, const char* system_prompt);
 const char* anthropic_get_system_prompt(const void* context);
 size_t anthropic_message_count(const void* context);
+size_t anthropic_turn_count(const void* context);
+err_t anthropic_get_turn_description(const void* context, size_t index,
+                                     char** description, size_t* len);
 err_t anthropic_add_user_message(void* context, const char* message);
 err_t anthropic_add_assistant_message(void* context, const char* message);
 err_t anthropic_add_tool_message(void* context, const char* id,
@@ -27,7 +30,7 @@ void anthropic_pop_message(void* context);
 err_t anthropic_call(void* context, char** response, size_t* len);
 err_t anthropic_call_stream(void* context, strmcb_t callback, void* userp);
 err_t anthropic_update(void* context, const char* response, size_t len);
-void anthropic_rewind(void* context);
+void anthropic_rewind(void* context, size_t turn_index);
 bool anthropic_is_finished(const void* context);
 const char* anthropic_latest_stop_reason(const void* context);
 const char* anthropic_latest_reasoning(const void* context);

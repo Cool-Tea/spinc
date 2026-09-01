@@ -26,6 +26,9 @@ toolset_t* cc_get_toolset(void* context);
 err_t cc_set_system_prompt(void* context, const char* system_prompt);
 const char* cc_get_system_prompt(const void* context);
 size_t cc_message_count(const void* context);
+size_t cc_turn_count(const void* context);
+err_t cc_get_turn_description(const void* context, size_t index,
+                              char** description, size_t* len);
 err_t cc_add_user_message(void* context, const char* message);
 err_t cc_add_assistant_message(void* context, const char* message);
 err_t cc_add_tool_message(void* context, const char* id, const char* tool_name,
@@ -35,7 +38,7 @@ void cc_pop_message(void* context);
 err_t cc_call(void* context, char** response, size_t* len);
 err_t cc_call_stream(void* context, strmcb_t callback, void* userp);
 err_t cc_update(void* context, const char* response, size_t len);
-void cc_rewind(void* context);
+void cc_rewind(void* context, size_t turn_index);
 bool cc_is_finished(const void* context);
 const char* cc_latest_stop_reason(const void* context);
 const char* cc_latest_reasoning(const void* context);

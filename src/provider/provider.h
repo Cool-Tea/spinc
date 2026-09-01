@@ -59,6 +59,11 @@ typedef struct provider {
 
   /* Get the number of messages */
   size_t (*message_count)(const void* context);
+  /* Get the number of conversation turns */
+  size_t (*turn_count)(const void* context);
+  /* Get the turn description of the specified turn */
+  err_t (*get_turn_description)(const void* context, size_t index,
+                                char** description, size_t* len);
   /* Add a user message */
   err_t (*add_user_message)(void* context, const char* message);
   /* Add an assistant message */
@@ -77,8 +82,8 @@ typedef struct provider {
   err_t (*call_stream)(void* context, strmcb_t callback, void* userp);
   /* Update the context with the given response */
   err_t (*update)(void* context, const char* response, size_t len);
-  /* Rewind the context to the previous state */
-  void (*rewind)(void* context);
+  /* Rewind the context to the specified conversation turn */
+  void (*rewind)(void* context, size_t turn_index);
 
   /* Check if the provider has finished */
   bool (*is_finished)(const void* context);

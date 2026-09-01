@@ -54,6 +54,11 @@ void agent_delete(agent_t* agent) {
   free(agent);
 }
 
+static size_t rewind_turn_index(const provider_t* provider, void* context) {
+  size_t turns = provider->turn_count(context);
+  return turns > 0 ? turns - 1 : 0;
+}
+
 err_t agent_run(agent_t* agent, const char* user_input) {
   const provider_t* provider = agent->provider;
   provider->add_user_message(agent->ctx, user_input);
@@ -66,7 +71,7 @@ err_t agent_run(agent_t* agent, const char* user_input) {
     err = provider->call(agent->ctx, &resp, &resp_len);
     if (err != ERROR_NONE) {
       log(ERROR, "Failed to call API: %s", provider->error_str(err));
-      provider->rewind(agent->ctx);
+      provider->rewind(agent->ctx, rewind_turn_index(provider, agent->ctx));
       return err;
     }
     log(DEBUG, "API response: %*s", (int)resp_len, resp);
@@ -75,7 +80,7 @@ err_t agent_run(agent_t* agent, const char* user_input) {
     if (err != ERROR_NONE) {
       log(ERROR, "Failed to update context: %s", provider->error_str(err));
       free(resp);
-      provider->rewind(agent->ctx);
+      provider->rewind(agent->ctx, rewind_turn_index(provider, agent->ctx));
       return err;
     }
     free(resp);
@@ -98,7 +103,7 @@ err_t agent_run(agent_t* agent, const char* user_input) {
     if (err != ERROR_NONE) {
       log(ERROR, "Failed to get latest tool calls: %s",
           provider->error_str(err));
-      provider->rewind(agent->ctx);
+      provider->rewind(agent->ctx, rewind_turn_index(provider, agent->ctx));
       return err;
     } else if (n_call > 0) {
       const toolset_t* toolset = provider->get_toolset(agent->ctx);
@@ -147,7 +152,7 @@ err_t agent_run(agent_t* agent, const char* user_input) {
       }
       free(calls);
       if (err != ERROR_NONE) {
-        provider->rewind(agent->ctx);
+        provider->rewind(agent->ctx, rewind_turn_index(provider, agent->ctx));
         return err;
       }
     }
@@ -168,7 +173,7 @@ static err_t sse_callback(void* context, const event_t* event, void* userp) {
       provider->update(context, (const char*)event->data, event->data_len);
   if (err != ERROR_NONE) {
     log(ERROR, "Failed to update context: %s", provider->error_str(err));
-    provider->rewind(context);
+    provider->rewind(context, rewind_turn_index(provider, context));
     return err;
   }
 
@@ -203,7 +208,7 @@ static err_t sse_callback(void* context, const event_t* event, void* userp) {
   err = provider->latest_tool_calls(context, &calls, &n_call);
   if (err != ERROR_NONE) {
     log(ERROR, "Failed to get latest tool calls: %s", provider->error_str(err));
-    provider->rewind(context);
+    provider->rewind(context, rewind_turn_index(provider, context));
     return err;
   } else if (n_call > 0) {
     const toolset_t* toolset = provider->get_toolset(context);
@@ -254,7 +259,7 @@ static err_t sse_callback(void* context, const event_t* event, void* userp) {
     }
     free(calls);
     if (err != ERROR_NONE) {
-      provider->rewind(context);
+      provider->rewind(context, rewind_turn_index(provider, context));
       return err;
     }
   }
@@ -274,7 +279,7 @@ err_t agent_run_stream(agent_t* agent, const char* user_input) {
     if (err != ERROR_NONE) {
       log(ERROR, "Failed to call API (streaming): %s",
           provider->error_str(err));
-      provider->rewind(agent->ctx);
+      provider->rewind(agent->ctx, rewind_turn_index(provider, agent->ctx));
       return err;
     }
   }

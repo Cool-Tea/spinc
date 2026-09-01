@@ -638,6 +638,16 @@ size_t anthropic_message_count(const void* context) {
   return pctx_message_count((const pctx_t*)context);
 }
 
+size_t anthropic_turn_count(const void* context) {
+  return pctx_turn_count((const pctx_t*)context);
+}
+
+err_t anthropic_get_turn_description(const void* context, size_t index,
+                                     char** description, size_t* len) {
+  return pctx_get_turn_description((const pctx_t*)context, index, description,
+                                   len);
+}
+
 // Messages are stored in the general form; role alternation and user/tool
 // merging happen in the request builder (anthropic_messages_to_json).
 err_t anthropic_add_user_message(void* context, const char* message) {
@@ -770,7 +780,9 @@ err_t anthropic_update(void* context, const char* response, size_t len) {
   return err;
 }
 
-void anthropic_rewind(void* context) { pctx_rewind((pctx_t*)context); }
+void anthropic_rewind(void* context, size_t turn_index) {
+  pctx_rewind((pctx_t*)context, turn_index);
+}
 
 bool anthropic_is_finished(const void* context) {
   const pctx_t* ctx = context;
@@ -824,6 +836,8 @@ static const provider_t anthropic_provider = {
     .set_system_prompt = anthropic_set_system_prompt,
     .get_system_prompt = anthropic_get_system_prompt,
     .message_count = anthropic_message_count,
+    .turn_count = anthropic_turn_count,
+    .get_turn_description = anthropic_get_turn_description,
     .add_user_message = anthropic_add_user_message,
     .add_assistant_message = anthropic_add_assistant_message,
     .add_tool_message = anthropic_add_tool_message,
