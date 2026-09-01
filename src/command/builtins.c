@@ -19,7 +19,7 @@ err_t help_command(const char* line) {
     if (len > max_len) max_len = len;
   }
   for (size_t i = 0; i < n_cmd; i++) {
-    printf("\033[36m%-*s  %s\033[0m\n", max_len + 2, cmds[i].name,
+    printf("\033[1;36m%-*s  %s\033[0m\n", max_len + 2, cmds[i].name,
            cmds[i].description);
   }
   return ERROR_NONE;
