@@ -14,6 +14,7 @@ Inspired by [suckless](https://suckless.org/philosophy), the agent is designed t
 - **Streaming** — token-by-token streaming via Server-Sent Events for both protocols, so reasoning and answers appear as they are generated instead of waiting for the full response.
 - **Session management** — every run gets a unique UUID, and the conversation context is persisted to disk so any session can be resumed later with `-r <uuid>`.
 - **Command system** — slash commands in the interactive REPL with readline tab completion.
+- **Conversation management** — `/history` lists every conversation turn, and `/rewind <turn_index>` rolls the session back to any earlier turn so you can retry or branch off in a different direction.
 - **Bundled JSON library** — ships with [sjson](https://github.com/Cool-Tea/sjson), a compact JSON parser/serializer.
 - **Colored logging** — per-file/function/line debug output, written to a per-session log file, configurable at compile time.
 
@@ -35,7 +36,7 @@ spinc/
     ├── config.h        # Your local config (gitignored)
     ├── log.h           # Logging macros & levels
     ├── sjson.c/h       # Bundled JSON library
-    ├── command/        # Slash commands (help/exit/quit)
+    ├── command/        # Slash commands
     ├── provider/       # Provider abstraction & protocol implementations
     └── tool/           # Tools framework
 ```
@@ -43,10 +44,10 @@ spinc/
 ## Requirements
 
 - A C23 compiler (the code is built with `-std=gnu23`)
+- `make`
 - [libcurl](https://curl.se/libcurl/)
 - [readline](https://tiswww.case.edu/php/chet/readline/rltop.html)
-- [libuuid](https://man7.org/linux/man-pages/man3/uuid.3.html) (for session UUIDs; `uuid-dev` on Debian/Ubuntu)
-- `make`
+- [libuuid](https://man7.org/linux/man-pages/man3/uuid.3.html)
 
 ## Build
 
@@ -157,18 +158,27 @@ Run `spinc` with the optional flags:
 ./spinc -r 1ebb9025-6717-40ea-b4e6-77868fa68012
 ```
 
-Without `-p`, `spinc` starts an interactive REPL. Type prompts at the `user>` prompt, and use slash commands — `/help` lists them, `/exit` or `/quit` leave the program:
+Without `-p`, `spinc` starts an interactive REPL. Type prompts at the `user>` prompt, and use slash commands — `/help` lists them, `/exit` or `/quit` leave the program, `/history` shows the conversation so far, and `/rewind <turn_index>` rolls the conversation back to an earlier turn:
 
 ```sh
 $ ./spinc # or make run
 user> What files are in this directory?
 ...
 user> /help
-   exit  Exit the program.
-   help  Show this help message.
-   quit  Exit the program.
+   exit      Exit the program.
+   help      Show this help message.
+   history   Show the conversation history.
+   quit      Exit the program.
+   rewind    Rewind the conversation.
+user> /history
+--- Conversation History ---
+Turn 1: What files are in this directory?
+Turn 2: Write a sentence introducing yourself to the file ./doc.txt
+user> /rewind 1
 user> /exit
 ```
+
+`/history` prints each conversation turn (numbered from 1, showing the prompt you typed, truncated to 100 characters). `/rewind <turn_index>` discards everything after the given turn — the turn index must be within `[1, <number of turns>]` — so you can retry or continue from an earlier point in the session.
 
 Every run belongs to a session identified by a UUID, printed at startup:
 

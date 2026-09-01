@@ -69,6 +69,8 @@ err_t http_post(const request_t* request, response_t* response) {
   if (res != CURLE_OK) {
     curl_easy_cleanup(curl);
     log(ERROR, "curl error: %s", curl_easy_strerror(res));
+    printf("\033[1;31mHTTP request failed: %s\033[0m\n",
+           curl_easy_strerror(res));
     return ERROR_CURL;
   }
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response->status);
@@ -161,8 +163,9 @@ err_t http_sse(const request_t* request,
   if (ctx.buffer) free(ctx.buffer);
   curl_slist_free_all(headers);
   if (res != CURLE_OK) {
-    curl_easy_cleanup(curl);
     log(ERROR, "curl error: %s", curl_easy_strerror(res));
+    printf("\033[1;31mHTTP SSE failed: %s\033[0m\n", curl_easy_strerror(res));
+    curl_easy_cleanup(curl);
     return ERROR_CURL;
   }
 
@@ -170,6 +173,7 @@ err_t http_sse(const request_t* request,
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
   if (status != 200) {
     log(ERROR, "HTTP request failed with status %ld", status);
+    printf("\033[1;31mHTTP request failed with status %ld\033[0m\n", status);
     curl_easy_cleanup(curl);
     return ERROR_CURL;
   }
