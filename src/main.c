@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -30,6 +31,22 @@ static void parse_options(int argc, char* argv[]) {
   }
 }
 
+static void display_command_matches(char** matches, int num_matches,
+                                    int max_length) {
+  if (num_matches <= 0) return;
+  printf("\n\033[1;36m--- Available commands ---\033[0m\n");
+  for (int i = 1; i <= num_matches; ++i) {
+    const char* match = matches[i] + 1;
+    const command_t* cmd = NULL;
+    err_t err = command_find(match, strlen(match), &cmd);
+    if (err != ERROR_NONE) continue;
+    printf("\033[1;36m%-*s  %s\033[0m\n", max_length + 1, match,
+           cmd->description);
+  }
+  rl_on_new_line();
+  rl_redisplay();
+}
+
 static char* command_generator(const char* text, int state) {
   static size_t index;
   static size_t len;
@@ -54,10 +71,10 @@ static char* command_generator(const char* text, int state) {
 static char** command_completion(const char* text, int start, int end) {
   (void)start;
   (void)end;
+  rl_attempted_completion_over = 1;
   char** matches = NULL;
   /* text points to the word being completed (== &rl_line_buffer[start]) */
   if (text[0] == '/') {
-    rl_attempted_completion_over = 1;
     matches = rl_completion_matches(text, command_generator);
   }
   return matches;
@@ -66,6 +83,7 @@ static char** command_completion(const char* text, int start, int end) {
 static err_t readline_init() {
   log(INFO, "Initializing readline");
   rl_attempted_completion_function = command_completion;
+  rl_completion_display_matches_hook = display_command_matches;
   return ERROR_NONE;
 }
 
@@ -75,7 +93,8 @@ static void readline_quit() {
 }
 
 static char* rl_get() {
-  char* trimmed = line = readline("\033[1;36muser\033[1;32m>\033[0m ");
+  char* trimmed = line =
+      readline("\001\033[1;36m\002user\001\033[1;32m\002>\001\033[0m\002 ");
   if (line && *line) {
     while (isspace((unsigned char)*trimmed)) trimmed++;
     add_history(trimmed);
