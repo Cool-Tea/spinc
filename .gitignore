@@ -6,6 +6,7 @@ src/**/*.o.debug
 src/**/*.d
 src/**/*.o.d
 src/config.h
+!Dockerfile
 !Makefile
 !.gitignore
 !README.md

@@ -21,6 +21,9 @@ release: $(TARGET)
 
 debug: $(DEBUG_TARGET)
 
+docker:
+	docker build -t spinc:latest .
+
 $(TARGET): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS) 
 
@@ -38,6 +41,9 @@ run: $(TARGET)
 
 run-debug: $(DEBUG_TARGET)
 	@$(DEBUG_TARGET)
+
+run-docker: docker
+	@docker run --rm -it -v $(ROOT):/spinc spinc:latest
 
 clean:
 	rm -f $(OBJS) $(TARGET) $(DEPS) $(DEBUG_OBJS) $(DEBUG_TARGET) $(DEBUG_DEPS)

@@ -17,11 +17,13 @@ Inspired by [suckless](https://suckless.org/philosophy), the agent is designed t
 - **Conversation management** — `/history` lists every conversation turn, and `/rewind <turn_index>` rolls the session back to any earlier turn so you can retry or branch off in a different direction.
 - **Bundled JSON library** — ships with [sjson](https://github.com/Cool-Tea/sjson), a compact JSON parser/serializer.
 - **Colored logging** — per-file/function/line debug output, written to a per-session log file, configurable at compile time.
+- **Docker support** — a bundled `Dockerfile` provides a container with all build dependencies, so you can build and run `spinc` on any platform that has Docker.
 
 ## Project layout
 
 ```
 spinc/
+├── Dockerfile          # Cross-platform Docker build
 ├── .gitignore          # gitignore file
 ├── LICENSE             # MIT LICENSE
 ├── Makefile            # Build configuration
@@ -59,6 +61,30 @@ make debug    # debug build
 ```
 
 Clean up build artifacts with `make clean`.
+
+## Docker
+
+A `Dockerfile` is included so `spinc` can be built and run on any platform with [Docker](https://www.docker.com/) — no need to install the C toolchain, libcurl, readline, or libuuid on the host.
+
+```sh
+make docker        # build the image (tagged spinc:latest)
+make run-docker    # build the image and drop into an interactive shell with the project mounted
+```
+
+Or manually (if you are on Windows):
+
+```sh
+docker build -t spinc:latest .
+docker run --rm -it -v "$PWD":/spinc spinc:latest
+```
+
+The image is based on `debian:13-slim` and preinstalls everything needed to build and run `spinc` (`build-essential`, `libcurl4-openssl-dev`, `uuid-dev`, `libreadline-dev`). Inside the container you can use the normal workflow: `make`, `make run`, etc.
+
+To use a different Debian mirror (e.g. if `deb.debian.org` is slow or unreachable in your region), pass the `DEBIAN_MIRRORS` build argument:
+
+```sh
+docker build --build-arg DEBIAN_MIRRORS=mirrors.tuna.tsinghua.edu.cn -t spinc:latest .
+```
 
 ## Configuration
 
