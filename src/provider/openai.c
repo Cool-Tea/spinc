@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include "sjson.h"
 
 #include "log.h"
@@ -37,9 +36,9 @@ static bool openai_same_turn(const char* a, const char* b) {
 
 // Convert the general message list into the OpenAI Chat Completions "messages"
 // array. An assistant turn (REASONING/ASSISTANT/TOOL_CALL sharing one id) is
-// grouped into a single assistant message: reasoning goes to
-// reasoning_content (DeepSeek only), text to content, and tool calls to the
-// tool_calls array. Tool results become role "tool" messages.
+// grouped into a single assistant message: reasoning goes to reasoning_content,
+// text to content, and tool calls to the tool_calls array. Tool results become
+// role "tool" messages.
 jnode_t* openai_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
   // The system prompt is prepended here so the stored conversation only holds
   // user/assistant/tool messages.
@@ -72,7 +71,6 @@ jnode_t* openai_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
         break;
       }
       case REASONING: {
-        if (!ctx->use_reasoning_content) break;
         const char* mid = message_id(m);
         if (!jcur || !openai_same_turn(cur_id, mid)) {
           jcur = openai_message("assistant", "");
@@ -355,7 +353,6 @@ err_t openai_update_full(pctx_t* ctx, jnode_t* jfirst) {
   char* turn_id = pctx_new_turn_id();
   if (!turn_id) return ERROR_OUT_OF_MEMORY;
 
-  // reasoning_content (DeepSeek and some compatible endpoints).
   jnode_t* jreasoning = jobject_get(jmessage, "reasoning_content");
   if (jis_string(jreasoning) && jstring_len(jreasoning)) {
     message_t* m = message_new(REASONING);
@@ -481,7 +478,6 @@ err_t openai_update_stream(pctx_t* ctx, jnode_t* jfirst, jnode_t* jdelta) {
     }
   }
 
-  // reasoning_content (DeepSeek).
   jnode_t* jreasoning = jobject_get(jdelta, "reasoning_content");
   if (jis_string(jreasoning) && jstring_len(jreasoning)) {
     message_t* m = NULL;
@@ -574,60 +570,40 @@ err_t cc_create_context(void** context) {
 
 void cc_delete_context(void* context) { pctx_delete((pctx_t*)context); }
 
-err_t cc_serialize(void* context, char** data, size_t* len) {
+err_t cc_serialize(const void* context, char** data, size_t* len) {
   return pctx_serialize((const pctx_t*)context, data, len);
 }
 
-err_t cc_deserialize(const char* data, size_t len, void** context) {
+err_t cc_deserialize(void* context, const char* data, size_t len) {
   if (!context) return ERROR_NULLPTR;
-  *context = NULL;
-  return pctx_deserialize(data, len, (pctx_t**)context);
+  return pctx_deserialize((pctx_t*)context, data, len);
 }
 
 err_t cc_set_model(void* context, const model_t* model) {
-  pctx_t* ctx = context;
-  if (!ctx || !model) return ERROR_NULLPTR;
-  model_t* copy = malloc(sizeof(model_t));
-  if (!copy) return ERROR_OUT_OF_MEMORY;
-  *copy = *model;
-  free(ctx->model);
-  ctx->model = copy;
-  return ERROR_NONE;
+  return pctx_set_model((pctx_t*)context, model);
 }
 
 model_t* cc_get_model(void* context) {
-  pctx_t* ctx = context;
-  return ctx ? ctx->model : NULL;
+  return pctx_get_model((pctx_t*)context);
 }
 
 err_t cc_set_toolset(void* context, const toolset_t* toolset) {
-  pctx_t* ctx = context;
-  if (!ctx || !toolset) return ERROR_NULLPTR;
-  ctx->toolset = (toolset_t*)toolset;
-  return ERROR_NONE;
+  return pctx_set_toolset((pctx_t*)context, toolset);
 }
 
 toolset_t* cc_get_toolset(void* context) {
-  pctx_t* ctx = context;
-  return ctx ? ctx->toolset : NULL;
+  return pctx_get_toolset((pctx_t*)context);
 }
 
 err_t cc_set_system_prompt(void* context, const char* system_prompt) {
-  pctx_t* ctx = context;
-  if (!ctx || !system_prompt) return ERROR_NULLPTR;
-  char* copy = strdup(system_prompt);
-  if (!copy) return ERROR_OUT_OF_MEMORY;
-  free(ctx->system_prompt);
-  ctx->system_prompt = copy;
-  return ERROR_NONE;
+  return pctx_set_system_prompt((pctx_t*)context, system_prompt);
 }
 
-const char* cc_get_system_prompt(void* context) {
-  pctx_t* ctx = context;
-  return ctx ? ctx->system_prompt : NULL;
+const char* cc_get_system_prompt(const void* context) {
+  return pctx_get_system_prompt((const pctx_t*)context);
 }
 
-size_t cc_message_count(void* context) {
+size_t cc_message_count(const void* context) {
   return pctx_message_count((const pctx_t*)context);
 }
 
@@ -764,27 +740,27 @@ err_t cc_update(void* context, const char* response, size_t len) {
 
 void cc_rewind(void* context) { pctx_rewind((pctx_t*)context); }
 
-bool cc_is_finished(void* context) {
-  pctx_t* ctx = context;
+bool cc_is_finished(const void* context) {
+  const pctx_t* ctx = context;
   return ctx ? ctx->finished : false;
 }
 
-const char* cc_latest_stop_reason(void* context) {
-  pctx_t* ctx = context;
+const char* cc_latest_stop_reason(const void* context) {
+  const pctx_t* ctx = context;
   return ctx ? ctx->latest_stop_reason : NULL;
 }
 
-const char* cc_latest_reasoning(void* context) {
-  pctx_t* ctx = context;
+const char* cc_latest_reasoning(const void* context) {
+  const pctx_t* ctx = context;
   return ctx ? ctx->latest_reasoning : NULL;
 }
 
-const char* cc_latest_content(void* context) {
-  pctx_t* ctx = context;
+const char* cc_latest_content(const void* context) {
+  const pctx_t* ctx = context;
   return ctx ? ctx->latest_content : NULL;
 }
 
-err_t cc_latest_tool_calls(void* context, toolcall_t** tool_calls,
+err_t cc_latest_tool_calls(const void* context, toolcall_t** tool_calls,
                            size_t* n_tool_call) {
   return pctx_latest_tool_calls((pctx_t*)context, tool_calls, n_tool_call);
 }

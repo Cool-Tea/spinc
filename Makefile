@@ -11,9 +11,9 @@ TARGET       = $(ROOT)/spinc
 DEBUG_TARGET = $(ROOT)/spinc_debug
 
 DEBUG_CFLAGS  := -I$(SRC_DIR) -Wall -Wextra -std=gnu23 -O0 -g -fsanitize=address -fno-omit-frame-pointer -DLOG_LEVEL=DEBUG -MMD
-DEBUG_LDFLAGS := -lcurl -lreadline -fsanitize=address -fno-omit-frame-pointer
+DEBUG_LDFLAGS := -lcurl -lreadline -luuid -fsanitize=address -fno-omit-frame-pointer
 CFLAGS  := -I$(SRC_DIR) -std=gnu23 -O2 -flto=auto -MMD
-LDFLAGS := -lcurl -lreadline -flto=auto
+LDFLAGS := -lcurl -lreadline -luuid -flto=auto
 
 all: $(TARGET) $(DEBUG_TARGET)
 

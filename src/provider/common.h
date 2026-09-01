@@ -6,24 +6,21 @@
 
 #include "error.h"
 #include "model.h"
-#include "tool/tool.h"
 #include "message.h"
+#include "tool/tool.h"
 
 // Shared provider context used by every provider implementation. It holds the
 // conversation history as provider-independent messages (message.h), a rewind
 // snapshot, and the "latest response" state that the agent reads after each
 // update() call.
 typedef struct pctx {
-  model_t* model;       // owned copy of the model config
-  toolset_t* toolset;   // borrowed (owned by the caller)
+  model_t* model;       // owned shallow copy of the model config
+  toolset_t* toolset;   // owned copy (freed by pctx_delete)
   char* system_prompt;  // owned
 
   msglist_t* messages;  // conversation history (system prompt excluded)
   msglist_t* snapshot;  // deep copy of messages for rewind()
 
-  // Echo assistant reasoning back to the model in requests (e.g. DeepSeek's
-  // reasoning_content). Generic OpenAI-compatible endpoints do not accept it.
-  bool use_reasoning_content;
   // Transient: id of the assistant turn currently being accumulated by a
   // stream. Used to group REASONING/ASSISTANT/TOOL_CALL messages into one
   // assistant turn.
@@ -41,6 +38,13 @@ typedef struct pctx {
 
 err_t pctx_new(pctx_t** out);
 void pctx_delete(pctx_t* ctx);
+
+err_t pctx_set_model(pctx_t* ctx, const model_t* model);
+model_t* pctx_get_model(pctx_t* ctx);
+err_t pctx_set_toolset(pctx_t* ctx, const toolset_t* toolset);
+toolset_t* pctx_get_toolset(pctx_t* ctx);
+err_t pctx_set_system_prompt(pctx_t* ctx, const char* system_prompt);
+const char* pctx_get_system_prompt(const pctx_t* ctx);
 
 // Free the latest-response state (but not the conversation).
 void pctx_clear_latest(pctx_t* ctx);
@@ -77,6 +81,6 @@ err_t pctx_latest_calls_from_turn(pctx_t* ctx);
 err_t pctx_latest_tool_calls(pctx_t* ctx, toolcall_t** calls, size_t* n);
 
 err_t pctx_serialize(const pctx_t* ctx, char** data, size_t* len);
-err_t pctx_deserialize(const char* data, size_t len, pctx_t** out);
+err_t pctx_deserialize(pctx_t* ctx, const char* data, size_t len);
 
 #endif  // PROVIDER_COMMON_H

@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include "sjson.h"
 
 #include "log.h"
@@ -602,60 +601,40 @@ err_t anthropic_create_context(void** context) {
 
 void anthropic_delete_context(void* context) { pctx_delete((pctx_t*)context); }
 
-err_t anthropic_serialize(void* context, char** data, size_t* len) {
+err_t anthropic_serialize(const void* context, char** data, size_t* len) {
   return pctx_serialize((const pctx_t*)context, data, len);
 }
 
-err_t anthropic_deserialize(const char* data, size_t len, void** context) {
+err_t anthropic_deserialize(void* context, const char* data, size_t len) {
   if (!context) return ERROR_NULLPTR;
-  *context = NULL;
-  return pctx_deserialize(data, len, (pctx_t**)context);
+  return pctx_deserialize((pctx_t*)context, data, len);
 }
 
 err_t anthropic_set_model(void* context, const model_t* model) {
-  pctx_t* ctx = context;
-  if (!ctx || !model) return ERROR_NULLPTR;
-  model_t* copy = malloc(sizeof(model_t));
-  if (!copy) return ERROR_OUT_OF_MEMORY;
-  *copy = *model;
-  free(ctx->model);
-  ctx->model = copy;
-  return ERROR_NONE;
+  return pctx_set_model((pctx_t*)context, model);
 }
 
 model_t* anthropic_get_model(void* context) {
-  pctx_t* ctx = context;
-  return ctx ? ctx->model : NULL;
+  return pctx_get_model((pctx_t*)context);
 }
 
 err_t anthropic_set_toolset(void* context, const toolset_t* toolset) {
-  pctx_t* ctx = context;
-  if (!ctx || !toolset) return ERROR_NULLPTR;
-  ctx->toolset = (toolset_t*)toolset;
-  return ERROR_NONE;
+  return pctx_set_toolset((pctx_t*)context, toolset);
 }
 
 toolset_t* anthropic_get_toolset(void* context) {
-  pctx_t* ctx = context;
-  return ctx ? ctx->toolset : NULL;
+  return pctx_get_toolset((pctx_t*)context);
 }
 
 err_t anthropic_set_system_prompt(void* context, const char* system_prompt) {
-  pctx_t* ctx = context;
-  if (!ctx || !system_prompt) return ERROR_NULLPTR;
-  char* copy = strdup(system_prompt);
-  if (!copy) return ERROR_OUT_OF_MEMORY;
-  free(ctx->system_prompt);
-  ctx->system_prompt = copy;
-  return ERROR_NONE;
+  return pctx_set_system_prompt((pctx_t*)context, system_prompt);
 }
 
-const char* anthropic_get_system_prompt(void* context) {
-  pctx_t* ctx = context;
-  return ctx ? ctx->system_prompt : NULL;
+const char* anthropic_get_system_prompt(const void* context) {
+  return pctx_get_system_prompt((const pctx_t*)context);
 }
 
-size_t anthropic_message_count(void* context) {
+size_t anthropic_message_count(const void* context) {
   return pctx_message_count((const pctx_t*)context);
 }
 
@@ -793,27 +772,27 @@ err_t anthropic_update(void* context, const char* response, size_t len) {
 
 void anthropic_rewind(void* context) { pctx_rewind((pctx_t*)context); }
 
-bool anthropic_is_finished(void* context) {
-  pctx_t* ctx = context;
+bool anthropic_is_finished(const void* context) {
+  const pctx_t* ctx = context;
   return ctx ? ctx->finished : false;
 }
 
-const char* anthropic_latest_stop_reason(void* context) {
-  pctx_t* ctx = context;
+const char* anthropic_latest_stop_reason(const void* context) {
+  const pctx_t* ctx = context;
   return ctx ? ctx->latest_stop_reason : NULL;
 }
 
-const char* anthropic_latest_reasoning(void* context) {
-  pctx_t* ctx = context;
+const char* anthropic_latest_reasoning(const void* context) {
+  const pctx_t* ctx = context;
   return ctx ? ctx->latest_reasoning : NULL;
 }
 
-const char* anthropic_latest_content(void* context) {
-  pctx_t* ctx = context;
+const char* anthropic_latest_content(const void* context) {
+  const pctx_t* ctx = context;
   return ctx ? ctx->latest_content : NULL;
 }
 
-err_t anthropic_latest_tool_calls(void* context, toolcall_t** calls,
+err_t anthropic_latest_tool_calls(const void* context, toolcall_t** calls,
                                   size_t* n_tool_call) {
   return pctx_latest_tool_calls((pctx_t*)context, calls, n_tool_call);
 }

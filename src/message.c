@@ -360,8 +360,9 @@ oom:
 err_t msglist_new(msglist_t** msglist) {
   if (!msglist) return ERROR_NULLPTR;
   *msglist = NULL;
-  msglist_t* ml = calloc(1, sizeof(msglist_t));
+  msglist_t* ml = malloc(sizeof(msglist_t));
   if (!ml) return ERROR_OUT_OF_MEMORY;
+  memset(ml, 0, sizeof(msglist_t));
   *msglist = ml;
   return ERROR_NONE;
 }

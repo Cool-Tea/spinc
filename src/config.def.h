@@ -1,13 +1,26 @@
 #ifdef TYPING
 #include "log.h"
+#include "command/command.h"
 #include "provider/provider.h"
 #endif
+
+/***********************************
+ * Runtime directory configuration *
+ ***********************************/
+
+static const char* run_dir = ".spinc";
+
+/***********
+ * Logging *
+ ***********/
+
+static enum log_level log_level = DEBUG;
 
 /***********************
  * Model configuration *
  ***********************/
 
-static const protyp_t provider_type = DEEPSEEK;
+static const protyp_t provider_type = OPENAI_COMPATIBLE;
 static const model_t model = {
     .name = "deepseek-v4-flash",
     .base_url = "https://api.deepseek.com",
@@ -46,10 +59,3 @@ static const char* system_prompt =
     "You must not execute any bash commands that are not safe. You must not "
     "execute any bash commands that are not necessary to fulfill the user's "
     "request.";
-
-/***********
- * Logging *
- ***********/
-
-static enum log_level log_level = DEBUG;
-static const char* log_dir = ".spinc/logs";

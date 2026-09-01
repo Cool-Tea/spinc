@@ -1,7 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
 #include "sjson.h"
 
 #include "provider/common.h"
@@ -9,8 +8,9 @@
 err_t pctx_new(pctx_t** out) {
   if (!out) return ERROR_NULLPTR;
   *out = NULL;
-  pctx_t* ctx = calloc(1, sizeof(pctx_t));
+  pctx_t* ctx = malloc(sizeof(pctx_t));
   if (!ctx) return ERROR_OUT_OF_MEMORY;
+  memset(ctx, 0, sizeof(pctx_t));
   err_t err = msglist_new(&ctx->messages);
   if (err != ERROR_NONE) {
     free(ctx);
@@ -48,12 +48,50 @@ void pctx_clear_latest(pctx_t* ctx) {
 void pctx_delete(pctx_t* ctx) {
   if (!ctx) return;
   free(ctx->model);
+  if (ctx->toolset) toolset_delete(ctx->toolset);
   free(ctx->system_prompt);
   free(ctx->stream_turn_id);
   if (ctx->snapshot) msglist_delete(ctx->snapshot);
   if (ctx->messages) msglist_delete(ctx->messages);
   pctx_clear_latest(ctx);
   free(ctx);
+}
+
+err_t pctx_set_model(pctx_t* ctx, const model_t* model) {
+  if (!ctx || !model) return ERROR_NULLPTR;
+  if (!ctx->model) {
+    ctx->model = malloc(sizeof(model_t));
+    if (!ctx->model) return ERROR_OUT_OF_MEMORY;
+  }
+  memcpy(ctx->model, model, sizeof(model_t));
+  return ERROR_NONE;
+}
+
+model_t* pctx_get_model(pctx_t* ctx) { return ctx ? ctx->model : NULL; }
+
+err_t pctx_set_toolset(pctx_t* ctx, const toolset_t* toolset) {
+  if (!ctx || !toolset) return ERROR_NULLPTR;
+  toolset_t* copy = NULL;
+  err_t err = toolset_copy(toolset, &copy);
+  if (err != ERROR_NONE) return err;
+  if (ctx->toolset) toolset_delete(ctx->toolset);
+  ctx->toolset = copy;
+  return ERROR_NONE;
+}
+
+toolset_t* pctx_get_toolset(pctx_t* ctx) { return ctx ? ctx->toolset : NULL; }
+
+err_t pctx_set_system_prompt(pctx_t* ctx, const char* system_prompt) {
+  if (!ctx || !system_prompt) return ERROR_NULLPTR;
+  char* copy = strdup(system_prompt);
+  if (!copy) return ERROR_OUT_OF_MEMORY;
+  if (ctx->system_prompt) free(ctx->system_prompt);
+  ctx->system_prompt = copy;
+  return ERROR_NONE;
+}
+
+const char* pctx_get_system_prompt(const pctx_t* ctx) {
+  return ctx ? ctx->system_prompt : NULL;
 }
 
 void pctx_take_snapshot(pctx_t* ctx) {
@@ -256,8 +294,6 @@ err_t pctx_serialize(const pctx_t* ctx, char** data, size_t* len) {
   *len = 0;
   jnode_t* root = jobject_new();
   if (!root) return ERROR_OUT_OF_MEMORY;
-  jobject_put(root, "system_prompt",
-              jstring_new(0, ctx->system_prompt ? ctx->system_prompt : ""));
   jnode_t* jmsg = NULL;
   err_t err = msglist_to_json(ctx->messages, &jmsg);
   if (err != ERROR_NONE) {
@@ -272,29 +308,19 @@ err_t pctx_serialize(const pctx_t* ctx, char** data, size_t* len) {
   return ERROR_NONE;
 }
 
-err_t pctx_deserialize(const char* data, size_t len, pctx_t** out) {
-  if (!data || !out) return ERROR_NULLPTR;
-  *out = NULL;
+err_t pctx_deserialize(pctx_t* ctx, const char* data, size_t len) {
+  if (!ctx || !data) return ERROR_NULLPTR;
   jnode_t* root = jfrom_string(data, (int)len);
   if (!root) return ERROR_UNKNOWN;
-  pctx_t* ctx = NULL;
-  err_t err = pctx_new(&ctx);
-  if (err != ERROR_NONE) {
-    jdelete(root);
-    return err;
-  }
-  jnode_t* jsp = jobject_get(root, "system_prompt");
-  if (jis_string(jsp)) ctx->system_prompt = strdup(jstring_content(jsp));
   jnode_t* jmsg = jobject_get(root, "messages");
   if (jis_array(jmsg)) {
     msglist_t* ml = NULL;
-    err = msglist_from_json(jmsg, &ml);
+    err_t err = msglist_from_json(jmsg, &ml);
     if (err == ERROR_NONE) {
       msglist_delete(ctx->messages);
       ctx->messages = ml;
     }
   }
   jdelete(root);
-  *out = ctx;
   return ERROR_NONE;
 }

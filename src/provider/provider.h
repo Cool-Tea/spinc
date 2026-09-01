@@ -13,7 +13,6 @@
 typedef enum provider_type {
   OPENAI_COMPATIBLE,
   ANTHROPIC_COMPATIBLE,
-  DEEPSEEK,
 } protyp_t;
 
 typedef err_t (*strmcb_t)(void* context, const event_t* event, void* userp);
@@ -39,9 +38,9 @@ typedef struct provider {
   void (*delete_context)(void* context);
 
   /* Serialize the context */
-  err_t (*serialize)(void* context, char** data, size_t* len);
+  err_t (*serialize)(const void* context, char** data, size_t* len);
   /* Deserialize the context */
-  err_t (*deserialize)(const char* data, size_t len, void** context);
+  err_t (*deserialize)(void* context, const char* data, size_t len);
 
   /* Set the model */
   err_t (*set_model)(void* context, const model_t* model);
@@ -56,10 +55,10 @@ typedef struct provider {
   /* Set the system prompt */
   err_t (*set_system_prompt)(void* context, const char* system_prompt);
   /* Get the system prompt */
-  const char* (*get_system_prompt)(void* context);
+  const char* (*get_system_prompt)(const void* context);
 
   /* Get the number of messages */
-  size_t (*message_count)(void* context);
+  size_t (*message_count)(const void* context);
   /* Add a user message */
   err_t (*add_user_message)(void* context, const char* message);
   /* Add an assistant message */
@@ -82,18 +81,18 @@ typedef struct provider {
   void (*rewind)(void* context);
 
   /* Check if the provider has finished */
-  bool (*is_finished)(void* context);
+  bool (*is_finished)(const void* context);
   /* Get the latest stop reason if available */
-  const char* (*latest_stop_reason)(void* context);
+  const char* (*latest_stop_reason)(const void* context);
   /* Get the latest reasoning if available */
-  const char* (*latest_reasoning)(void* context);
+  const char* (*latest_reasoning)(const void* context);
   /* Get the latest content if available */
-  const char* (*latest_content)(void* context);
+  const char* (*latest_content)(const void* context);
   /* Get the latest tool calls if available */
-  err_t (*latest_tool_calls)(void* context, toolcall_t** tool_calls,
+  err_t (*latest_tool_calls)(const void* context, toolcall_t** tool_calls,
                              size_t* n_tool_call);
 } provider_t;
 
-const provider_t* get_provider(protyp_t type);
+const provider_t* provider_get(protyp_t type);
 
 #endif  // PROVIDER_H

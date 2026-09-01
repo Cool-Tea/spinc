@@ -12,6 +12,8 @@ typedef enum error_code {
   ERROR_OUT_OF_BOUNDS,
   ERROR_IO,
   ERROR_NOT_FOUND,
+  ERROR_NOT_READY,
+  ERROR_SERDE,
   ERROR_CURL,
   ERROR_UNKNOWN,
   /* Custom errors start here */

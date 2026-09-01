@@ -6,25 +6,25 @@
 
 #include "log.h"
 #include "error.h"
-#include "agent.h"
+#include "session.h"
 #include "command/command.h"
 
 #include "config.h"
 
 typedef struct cmdopts {
   const char* prompt;
+  const char* uuid;
 } cmdopts_t;
 
 static cmdopts_t cmdopts = {0};
-static agent_t* agent = NULL;
-static toolset_t* enabled_toolset = NULL;
 static char* line = NULL;
 
 static void parse_options(int argc, char* argv[]) {
   int opt;
-  while ((opt = getopt(argc, argv, "p:")) != -1) {
+  while ((opt = getopt(argc, argv, "p:r:")) != -1) {
     switch (opt) {
       case 'p': cmdopts.prompt = optarg; break;
+      case 'r': cmdopts.uuid = optarg; break;
       default: break;
     }
   }
@@ -69,53 +69,7 @@ static err_t readline_init() {
   return ERROR_NONE;
 }
 
-static err_t toolset_init(const char** tools, size_t n_tool) {
-  log(INFO, "Initializing toolset with %zu tools", n_tool);
-  const toolset_t* toolset = global_toolset();
-  err_t err = toolset_new(&enabled_toolset);
-  if (err != ERROR_NONE) {
-    log(ERROR, "Failed to initialize enabled toolset: %s", error_str(err));
-    return err;
-  }
-  for (size_t i = 0; i < n_tool; ++i) {
-    const tool_t* tool = NULL;
-    err_t err = toolset_find(toolset, tools[i], strlen(tools[i]), &tool);
-    if (err != ERROR_NONE) {
-      log(WARN, "Skip not found tool '%s'", tools[i]);
-      continue;
-    }
-    log(INFO, "Adding tool: %s", tool->def.name);
-    err = toolset_add(enabled_toolset, tool);
-    if (err != ERROR_NONE) {
-      log(ERROR, "Failed to add tool '%s': %s", tool->def.name, error_str(err));
-      return err;
-    }
-  }
-  return ERROR_NONE;
-}
-
-static err_t agent_init() {
-  const provider_t* provider = get_provider(provider_type);
-  log(INFO, "Initializing agent with model %s from provider %s", model.name,
-      provider->name());
-  err_t err =
-      agent_new(provider, &model, system_prompt, enabled_toolset, &agent);
-  if (err != ERROR_NONE) {
-    log(ERROR, "Failed to create agent: %s", provider->error_str(err));
-    return err;
-  }
-  return ERROR_NONE;
-}
-
-static void cleanup() {
-  if (agent) {
-    agent_delete(agent);
-    agent = NULL;
-  }
-  if (enabled_toolset) {
-    toolset_delete(enabled_toolset);
-    enabled_toolset = NULL;
-  }
+static void readline_quit() {
   free(line);
   line = NULL;
 }
@@ -135,22 +89,27 @@ int main(int argc, char* argv[]) {
   const char* base_url = model.base_url;
   const char* api_key = model.api_key;
   if (!base_url || !*base_url || !api_key || !*api_key) {
-    fprintf(stderr,
-            " \033[1;31m[ERROR] base_url or api_key is not set in "
-            "config.h\033[0m\n");
+    log(ERROR, "base_url or api_key is not set in config.h");
     return 1;
   }
 
-  atexit(log_quit);
+  atexit(session_quit);
   atexit(http_quit);
-  atexit(cleanup);
+  atexit(readline_quit);
 
   err_t err = ERROR_NONE;
-  if ((err = log_init(log_dir, log_level)) != ERROR_NONE) {
-    fprintf(
-        stderr,
-        " \033[1;31m[ERROR] error: failed to initialize logging: %s\033[0m\n",
-        error_str(err));
+  sesscfg_t config = {
+      .run_dir = run_dir,
+      .uuid_str = cmdopts.uuid,
+      .log_level = log_level,
+      .provider = provider_type,
+      .model = &model,
+      .system_prompt = system_prompt,
+      .tools = tools,
+      .n_tool = n_tool,
+  };
+  if ((err = session_init(&config)) != ERROR_NONE) {
+    log(ERROR, "Failed to initialize session: %s\033[0m\n", error_str(err));
     return 1;
   }
 
@@ -164,20 +123,9 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  if ((err = toolset_init(tools, n_tool)) != ERROR_NONE) {
-    log(ERROR, "Failed to initialize global toolset: %s", error_str(err));
-    return 1;
-  }
-
-  if ((err = agent_init()) != ERROR_NONE) {
-    log(ERROR, "Failed to initialize agent: %s", error_str(err));
-    return 1;
-  }
-
-  err_t (*run)(agent_t*, const char*) =
-      model.stream ? agent_run_stream : agent_run;
+  err_t (*run)(const char*) = model.stream ? session_run_stream : session_run;
   if (cmdopts.prompt) {
-    err = run(agent, cmdopts.prompt);
+    err = run(cmdopts.prompt);
   } else {
     while (1) {
       char* trimmed_line = rl_get();
@@ -188,7 +136,8 @@ int main(int argc, char* argv[]) {
         if (err == ERROR_NONE) err = cmd->func(trimmed_line);
         else printf("\033[1;31mUnknown command: %s\033[0m\n", trimmed_line);
       } else {
-        err = run(agent, trimmed_line);
+        err = run(trimmed_line);
+        if (err == ERROR_NONE) session_save();
       }
       if (line) free(line);
     }
