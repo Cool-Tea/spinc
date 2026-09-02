@@ -818,7 +818,7 @@ static const char* anthropic_error_str(err_t err) {
  *          Provider
  * ============================== */
 
-static protyp_t anthropic_type() { return ANTHROPIC_COMPATIBLE; }
+static protyp_t anthropic_type() { return ANTHROPIC; }
 static const char* anthropic_name() { return "Anthropic Compatible"; }
 
 static const provider_t anthropic_provider = {
@@ -854,6 +854,4 @@ static const provider_t anthropic_provider = {
     .latest_tool_calls = anthropic_latest_tool_calls,
 };
 
-const provider_t* get_anthropic_compatible_provider() {
-  return &anthropic_provider;
-}
+const provider_t* get_anthropic_provider() { return &anthropic_provider; }

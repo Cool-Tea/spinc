@@ -5,7 +5,7 @@
 
 #include "log.h"
 #include "http.h"
-#include "provider/openai.h"
+#include "provider/chat_completion.h"
 
 #define URL_LEN 512
 #define AUTH_HEADER_LEN 512
@@ -14,14 +14,14 @@
  *        Request building
  * ============================== */
 
-static jnode_t* openai_system_message(const char* content) {
+static jnode_t* cc_system_message(const char* content) {
   jnode_t* jmessage = jobject_new();
   jobject_put(jmessage, "role", jstring_new(0, "system"));
   jobject_put(jmessage, "content", jstring_new(0, content ? content : ""));
   return jmessage;
 }
 
-static jnode_t* openai_message(const char* role, const char* content) {
+static jnode_t* cc_message(const char* role, const char* content) {
   jnode_t* jmessage = jobject_new();
   jobject_put(jmessage, "role", jstring_new(0, role));
   jobject_put(jmessage, "content", jstring_new(0, content ? content : ""));
@@ -29,7 +29,7 @@ static jnode_t* openai_message(const char* role, const char* content) {
 }
 
 // Messages with NULL ids (or equal ids) belong to the same assistant turn.
-static bool openai_same_turn(const char* a, const char* b) {
+static bool cc_same_turn(const char* a, const char* b) {
   if (!a || !b) return true;
   return strcmp(a, b) == 0;
 }
@@ -39,10 +39,10 @@ static bool openai_same_turn(const char* a, const char* b) {
 // grouped into a single assistant message: reasoning goes to reasoning_content,
 // text to content, and tool calls to the tool_calls array. Tool results become
 // role "tool" messages.
-jnode_t* openai_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
+static jnode_t* cc_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
   // The system prompt is prepended here so the stored conversation only holds
   // user/assistant/tool messages.
-  jarray_add(jarr, openai_system_message(ctx->system_prompt));
+  jarray_add(jarr, cc_system_message(ctx->system_prompt));
 
   jnode_t* jcur = NULL;       // assistant message being built
   const char* cur_id = NULL;  // turn id of the current assistant message
@@ -50,19 +50,19 @@ jnode_t* openai_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
     const message_t* m = &ctx->messages->messages[i];
     switch (m->type) {
       case SYSTEM:
-        jarray_add(jarr, openai_system_message(m->system.text));
+        jarray_add(jarr, cc_system_message(m->system.text));
         jcur = NULL;
         cur_id = NULL;
         break;
       case USER:
-        jarray_add(jarr, openai_message("user", m->user.text));
+        jarray_add(jarr, cc_message("user", m->user.text));
         jcur = NULL;
         cur_id = NULL;
         break;
       case ASSISTANT: {
         const char* mid = message_id(m);
-        if (!jcur || !openai_same_turn(cur_id, mid)) {
-          jcur = openai_message("assistant", "");
+        if (!jcur || !cc_same_turn(cur_id, mid)) {
+          jcur = cc_message("assistant", "");
           jarray_add(jarr, jcur);
           cur_id = mid;
         }
@@ -72,8 +72,8 @@ jnode_t* openai_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
       }
       case REASONING: {
         const char* mid = message_id(m);
-        if (!jcur || !openai_same_turn(cur_id, mid)) {
-          jcur = openai_message("assistant", "");
+        if (!jcur || !cc_same_turn(cur_id, mid)) {
+          jcur = cc_message("assistant", "");
           jarray_add(jarr, jcur);
           cur_id = mid;
         }
@@ -83,8 +83,8 @@ jnode_t* openai_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
       }
       case TOOL_CALL: {
         const char* mid = message_id(m);
-        if (!jcur || !openai_same_turn(cur_id, mid)) {
-          jcur = openai_message("assistant", "");
+        if (!jcur || !cc_same_turn(cur_id, mid)) {
+          jcur = cc_message("assistant", "");
           jarray_add(jarr, jcur);
           cur_id = mid;
         }
@@ -127,7 +127,7 @@ jnode_t* openai_messages_to_json(const pctx_t* ctx, jnode_t* jarr) {
   return jarr;
 }
 
-static jnode_t* openai_serialize_tool(const tool_t* tool) {
+static jnode_t* cc_serialize_tool(const tool_t* tool) {
   const tooldef_t* tooldef = &tool->def;
   jnode_t* jtool = jobject_new();
   jobject_put(jtool, "type", jstring_new(0, "function"));
@@ -156,19 +156,19 @@ static jnode_t* openai_serialize_tool(const tool_t* tool) {
   return jtool;
 }
 
-static jnode_t* openai_body(const pctx_t* ctx, bool stream) {
+static jnode_t* cc_body(const pctx_t* ctx, bool stream) {
   jnode_t* jbody = jobject_new();
   jobject_put(jbody, "model", jstring_new(0, ctx->model->name));
 
   // Convert the general conversation into the API-specific messages array
-  // (the system prompt is prepended by openai_messages_to_json).
-  jobject_put(jbody, "messages", openai_messages_to_json(ctx, jarray_new()));
+  // (the system prompt is prepended by cc_messages_to_json).
+  jobject_put(jbody, "messages", cc_messages_to_json(ctx, jarray_new()));
 
   jnode_t* jtools = jarray_new();
   jobject_put(jbody, "tools", jtools);
   if (ctx->toolset) {
     for (size_t i = 0; i < ctx->toolset->n_tool; ++i) {
-      jarray_add(jtools, openai_serialize_tool(&ctx->toolset->tools[i]));
+      jarray_add(jtools, cc_serialize_tool(&ctx->toolset->tools[i]));
     }
   }
 
@@ -193,15 +193,15 @@ static jnode_t* openai_body(const pctx_t* ctx, bool stream) {
  *           HTTP layer
  * ============================== */
 
-static err_t openai_http_call(const pctx_t* ctx, bool stream,
-                              response_t* resp_out) {
+static err_t cc_http_call(const pctx_t* ctx, bool stream,
+                          response_t* resp_out) {
   char url[URL_LEN];
   char auth[AUTH_HEADER_LEN];
   snprintf(url, sizeof(url), "%s/chat/completions", ctx->model->base_url);
   snprintf(auth, sizeof(auth), "Authorization: Bearer %s", ctx->model->api_key);
   const char* headers[] = {auth, "Content-Type: application/json"};
 
-  jnode_t* jbody = openai_body(ctx, stream);
+  jnode_t* jbody = cc_body(ctx, stream);
   if (!jbody) return ERROR_OUT_OF_MEMORY;
   char* body = jto_string(jbody);
   jdelete(jbody);
@@ -237,7 +237,7 @@ static err_t openai_http_call(const pctx_t* ctx, bool stream,
  * ============================== */
 
 // True when the SSE payload is the terminating "[DONE]" marker.
-bool openai_done_marker(const char* data, size_t len) {
+static bool cc_done_marker(const char* data, size_t len) {
   while (len > 0 && (data[0] == ' ' || data[0] == '\t' || data[0] == '\r')) {
     ++data;
     --len;
@@ -250,7 +250,7 @@ bool openai_done_marker(const char* data, size_t len) {
 // Return (and lazily create) the id of the assistant turn being accumulated by
 // the stream. A fresh id is generated when the trailing messages no longer
 // belong to the current stream turn.
-static const char* openai_stream_turn_id(pctx_t* ctx) {
+static const char* cc_stream_turn_id(pctx_t* ctx) {
   size_t n = ctx->messages->n_message;
   if (ctx->stream_turn_id && n > 0) {
     message_t* last = &ctx->messages->messages[n - 1];
@@ -269,10 +269,10 @@ static const char* openai_stream_turn_id(pctx_t* ctx) {
 
 // Get the trailing message of `type` within the current stream turn, creating
 // it (with the turn id) if absent.
-static err_t openai_ensure_turn_message(pctx_t* ctx, msgtyp_t type,
-                                        message_t** out) {
+static err_t cc_ensure_turn_message(pctx_t* ctx, msgtyp_t type,
+                                    message_t** out) {
   *out = NULL;
-  const char* tid = openai_stream_turn_id(ctx);
+  const char* tid = cc_stream_turn_id(ctx);
   if (!tid) return ERROR_OUT_OF_MEMORY;
   size_t n = ctx->messages->n_message;
   for (size_t i = n; i > 0; --i) {
@@ -300,10 +300,10 @@ static err_t openai_ensure_turn_message(pctx_t* ctx, msgtyp_t type,
 
 // Get (or create) the TOOL_CALL message at stream `index` within the current
 // turn. Gaps are filled so out-of-order fragments are merged correctly.
-static err_t openai_stream_tool_call(pctx_t* ctx, int index, message_t** out) {
+static err_t cc_stream_tool_call(pctx_t* ctx, int index, message_t** out) {
   *out = NULL;
   if (index < 0) return ERROR_NONE;
-  const char* tid = openai_stream_turn_id(ctx);
+  const char* tid = cc_stream_turn_id(ctx);
   if (!tid) return ERROR_OUT_OF_MEMORY;
   size_t n = ctx->messages->n_message;
   size_t start = n;
@@ -343,7 +343,7 @@ static err_t openai_stream_tool_call(pctx_t* ctx, int index, message_t** out) {
 // Non-streaming response: convert the assistant message into general
 // REASONING/ASSISTANT/TOOL_CALL messages (all sharing one turn id) and expose
 // the latest state.
-err_t openai_update_full(pctx_t* ctx, jnode_t* jfirst) {
+static err_t cc_update_full(pctx_t* ctx, jnode_t* jfirst) {
   jnode_t* jmessage = jobject_get(jfirst, "message");
   if (!jmessage) {
     log(ERROR, "Response missing message");
@@ -469,19 +469,19 @@ err_t openai_update_full(pctx_t* ctx, jnode_t* jfirst) {
 // Streaming delta: merge into the trailing assistant turn. Tool calls are only
 // exposed once the finish_reason arrives, so partial fragments are never
 // executed.
-err_t openai_update_stream(pctx_t* ctx, jnode_t* jfirst, jnode_t* jdelta) {
+static err_t cc_update_stream(pctx_t* ctx, jnode_t* jfirst, jnode_t* jdelta) {
   // role delta: begin (or continue) the assistant turn.
   jnode_t* jdelta_role = jobject_get(jdelta, "role");
   if (jis_string(jdelta_role)) {
     if (strcmp(jstring_content(jdelta_role), "assistant") == 0) {
-      openai_stream_turn_id(ctx);
+      cc_stream_turn_id(ctx);
     }
   }
 
   jnode_t* jreasoning = jobject_get(jdelta, "reasoning_content");
   if (jis_string(jreasoning) && jstring_len(jreasoning)) {
     message_t* m = NULL;
-    err_t err = openai_ensure_turn_message(ctx, REASONING, &m);
+    err_t err = cc_ensure_turn_message(ctx, REASONING, &m);
     if (err != ERROR_NONE) return err;
     err = pctx_append_text(&m->reasoning.text, &m->reasoning.text_len,
                            jstring_content(jreasoning));
@@ -494,7 +494,7 @@ err_t openai_update_stream(pctx_t* ctx, jnode_t* jfirst, jnode_t* jdelta) {
   jnode_t* jcontent = jobject_get(jdelta, "content");
   if (jis_string(jcontent) && jstring_len(jcontent)) {
     message_t* m = NULL;
-    err_t err = openai_ensure_turn_message(ctx, ASSISTANT, &m);
+    err_t err = cc_ensure_turn_message(ctx, ASSISTANT, &m);
     if (err != ERROR_NONE) return err;
     err = pctx_append_text(&m->assistant.text, &m->assistant.text_len,
                            jstring_content(jcontent));
@@ -512,7 +512,7 @@ err_t openai_update_stream(pctx_t* ctx, jnode_t* jfirst, jnode_t* jdelta) {
       int index =
           jis_number(jindex_node) ? (int)jas_number(jindex_node)->value : -1;
       message_t* m = NULL;
-      err_t err = openai_stream_tool_call(ctx, index, &m);
+      err_t err = cc_stream_tool_call(ctx, index, &m);
       if (err != ERROR_NONE) return err;
       if (!m) continue;
 
@@ -651,7 +651,7 @@ err_t cc_call(void* context, char** response, size_t* len) {
   ctx->finished = false;
 
   response_t resp = {0};
-  err_t err = openai_http_call(ctx, false, &resp);
+  err_t err = cc_http_call(ctx, false, &resp);
   if (err != ERROR_NONE) return err;
   *response = (char*)resp.data;  // owned by the caller now
   *len = resp.data_len;
@@ -687,7 +687,7 @@ err_t cc_call_stream(void* context, strmcb_t callback, void* userp) {
   snprintf(auth, sizeof(auth), "Authorization: Bearer %s", ctx->model->api_key);
   const char* headers[] = {auth, "Content-Type: application/json"};
 
-  jnode_t* jbody = openai_body(ctx, true);
+  jnode_t* jbody = cc_body(ctx, true);
   if (!jbody) return ERROR_OUT_OF_MEMORY;
   char* body = jto_string(jbody);
   jdelete(jbody);
@@ -715,7 +715,7 @@ err_t cc_update(void* context, const char* response, size_t len) {
   if (!ctx || !response) return ERROR_NULLPTR;
   // The "[DONE]" marker terminates the stream. Clear the latest state so the
   // agent does not re-execute the tool calls it already handled.
-  if (openai_done_marker(response, len)) {
+  if (cc_done_marker(response, len)) {
     pctx_clear_latest(ctx);
     free(ctx->stream_turn_id);
     ctx->stream_turn_id = NULL;
@@ -740,9 +740,9 @@ err_t cc_update(void* context, const char* response, size_t len) {
   jnode_t* jdelta = jobject_get(jfirst, "delta");
   err_t err = ERROR_NONE;
   if (jdelta) {
-    err = openai_update_stream(ctx, jfirst, jdelta);
+    err = cc_update_stream(ctx, jfirst, jdelta);
   } else {
-    err = openai_update_full(ctx, jfirst);
+    err = cc_update_full(ctx, jfirst);
   }
   jdelete(json);
   return err;
@@ -786,10 +786,10 @@ const char* cc_error_str(err_t err) {
  *          Provider
  * ============================== */
 
-static protyp_t cc_type() { return OPENAI_COMPATIBLE; }
-static const char* cc_name() { return "OpenAI Compatible"; }
+static protyp_t cc_type() { return OPENAI_CHAT_COMPLETION; }
+static const char* cc_name() { return "OpenAI Chat Completion"; }
 
-static const provider_t openai_provider = {
+static const provider_t cc_provider = {
     .type = cc_type,
     .name = cc_name,
     .error_str = cc_error_str,
@@ -822,4 +822,4 @@ static const provider_t openai_provider = {
     .latest_tool_calls = cc_latest_tool_calls,
 };
 
-const provider_t* get_openai_compatible_provider() { return &openai_provider; }
+const provider_t* get_openai_chat_completion_provider() { return &cc_provider; }

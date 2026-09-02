@@ -20,7 +20,8 @@ static enum log_level log_level = DEBUG;
  * Model configuration *
  ***********************/
 
-static const protyp_t provider_type = OPENAI_COMPATIBLE;
+// Provider type: OPENAI_CHAT_COMPLETION, OPENAI_RESPONSES or ANTHROPIC
+static const protyp_t provider_type = OPENAI_CHAT_COMPLETION;
 static const model_t model = {
     .name = "deepseek-v4-flash",
     .base_url = "https://api.deepseek.com",

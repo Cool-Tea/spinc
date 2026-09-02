@@ -11,8 +11,9 @@
 #include "provider/common.h"
 
 typedef enum provider_type {
-  OPENAI_COMPATIBLE,
-  ANTHROPIC_COMPATIBLE,
+  OPENAI_CHAT_COMPLETION,
+  OPENAI_RESPONSES,
+  ANTHROPIC,
 } protyp_t;
 
 typedef err_t (*strmcb_t)(void* context, const event_t* event, void* userp);

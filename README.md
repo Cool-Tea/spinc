@@ -1,6 +1,6 @@
 # spinc
 
-A minimal AI agent written in C. `spinc` connects to any OpenAI-compatible Chat Completions API or the Anthropic Messages API, sends your prompt along with a set of tools, and automatically executes tool calls in a loop until the model produces a final answer.
+A minimal AI agent written in C. `spinc` connects to any OpenAI-compatible Chat Completions API, the Anthropic Messages API, or an OpenAI Responses API, sends your prompt along with a set of tools, and automatically executes tool calls in a loop until the model produces a final answer.
 
 ## Design Philosophy
 
@@ -10,7 +10,7 @@ Inspired by [suckless](https://suckless.org/philosophy), the agent is designed t
 
 - **Pure C agent loop** — sends messages to the API, executes any requested tool calls, feeds the results back, and repeats until the model answers.
 - **Built-in tools** — `Read`, `Write`, `Edit`, and `Bash` let the model read files, write files, and run shell commands. **In fact, the README is written by this agent!**
-- **Multi-protocol** — speaks the OpenAI Chat Completion and Anthropic Message protocols behind a single provider abstraction. Two providers are bundled: `OPENAI_COMPATIBLE` and `ANTHROPIC_COMPATIBLE`.
+- **Multi-protocol** — speaks the OpenAI Chat Completion, Anthropic Message and OpenAI Responses protocols behind a single provider abstraction. Three providers are bundled: `OPENAI_CHAT_COMPLETION`, `OPENAI_RESPONSES` and `ANTHROPIC`.
 - **Streaming** — token-by-token streaming via Server-Sent Events for both protocols, so reasoning and answers appear as they are generated instead of waiting for the full response.
 - **Session management** — every run gets a unique UUID, and the conversation context is persisted to disk so any session can be resumed later with `-r <uuid>`.
 - **Command system** — slash commands in the interactive REPL with readline tab completion.
@@ -110,7 +110,7 @@ Each session gets its own `<run_dir>/sessions/<uuid>/` directory containing the 
 ### Model
 
 ```c
-static const protyp_t provider_type = OPENAI_COMPATIBLE;
+static const protyp_t provider_type = OPENAI_CHAT_COMPLETION;
 static const model_t model = {
     .name             = "deepseek-v4-flash",
     .base_url         = "https://api.deepseek.com",
@@ -123,7 +123,7 @@ static const model_t model = {
 };
 ```
 
-- `provider_type` — the provider implementation to use: `OPENAI_COMPATIBLE` or `ANTHROPIC_COMPATIBLE` (see `src/provider/provider.h`).
+- `provider_type` — the provider implementation to use: `OPENAI_CHAT_COMPLETION`, `OPENAI_RESPONSES` or `ANTHROPIC`.
 - `name` — the model identifier sent in the request body.
 - `base_url` — the API base URL.
 - `api_key` — the secret used for authentication.
@@ -131,7 +131,7 @@ static const model_t model = {
 - `reasoning_effort` — the reasoning effort level.
 - `top_p` — nucleus sampling parameter sent with the request.
 - `max_tokens` — the maximum number of tokens to generate; `-1` to let the API use its default.
-- `stream` — set to `true` to enable streaming mode: the model's reasoning and answer are printed incrementally as they are generated instead of after the full response arrives. Works for both providers (`OPENAI_COMPATIBLE` and `ANTHROPIC_COMPATIBLE`).
+- `stream` — set to `true` to enable streaming mode: the model's reasoning and answer are printed incrementally as they are generated instead of after the full response arrives. Works for all three providers.
 
 ### Tools
 

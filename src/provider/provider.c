@@ -1,12 +1,14 @@
 #include "provider/provider.h"
-#include "provider/openai.h"
+#include "provider/chat_completion.h"
+#include "provider/responses.h"
 #include "provider/anthropic.h"
 
 typedef const provider_t* (*profact_t)();
 
 static profact_t provider_factories[] = {
-    [OPENAI_COMPATIBLE] = get_openai_compatible_provider,
-    [ANTHROPIC_COMPATIBLE] = get_anthropic_compatible_provider,
+    [OPENAI_CHAT_COMPLETION] = get_openai_chat_completion_provider,
+    [OPENAI_RESPONSES] = get_openai_responses_provider,
+    [ANTHROPIC] = get_anthropic_provider,
 };
 
 const provider_t* provider_get(protyp_t type) {

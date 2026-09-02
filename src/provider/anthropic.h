@@ -37,6 +37,7 @@ const char* anthropic_latest_reasoning(const void* context);
 const char* anthropic_latest_content(const void* context);
 err_t anthropic_latest_tool_calls(const void* context, toolcall_t** calls,
                                   size_t* n_tool_call);
-const provider_t* get_anthropic_compatible_provider();
+
+const provider_t* get_anthropic_provider();
 
 #endif  // ANTHROPIC_H
