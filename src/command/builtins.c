@@ -73,5 +73,13 @@ err_t rewind_command(const char* line) {
            turn_count);
     return ERROR_NONE;
   }
-  return session_rewind((size_t)turn_index - 1);
+  err_t err = session_rewind((size_t)turn_index - 1);
+  if (err != ERROR_NONE) {
+    printf("\033[1;36mFailed to rewind turn %ld: %s\033[0m\n", turn_index,
+           error_str(err));
+  } else {
+    printf("\033[1;36mRewind turn %ld, content discarded.\033[0m\n",
+           turn_index);
+  }
+  return err;
 }
